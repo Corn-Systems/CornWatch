@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using CornWatch.Models;
 
 namespace CornWatch.Core;
@@ -14,6 +15,7 @@ public static class SnapshotExporter
     {
         WriteIndented = true,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
     };
 
     public static string Export(SystemSnapshot snap)

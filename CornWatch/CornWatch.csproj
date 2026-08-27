@@ -2,20 +2,27 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net8.0-windows</TargetFramework>
+    <TargetFramework>net10.0-windows</TargetFramework>
     <UseWindowsForms>true</UseWindowsForms>
-    <ApplicationIcon>Assets\cornwatch.ico</ApplicationIcon>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <ApplicationIcon>assets\cornwatch.ico</ApplicationIcon>
     <AssemblyName>CornWatch</AssemblyName>
     <RootNamespace>CornWatch</RootNamespace>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <Company>Corn Studios</Company>
+    <Product>CornWatch</Product>
+    <Copyright>Corn Studios 2026</Copyright>
+    <Version>0.2.0</Version>
   </PropertyGroup>
 
   <ItemGroup>
-    <Content Include="Assets\cornwatch.ico">
+    <!-- Folder on disk is lowercase "assets" — casing must match exactly
+         or case-sensitive build environments (Linux CI) fail to find these -->
+    <Content Include="assets\cornwatch.ico">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </Content>
-    <Content Include="Assets\cornwatch.png">
+    <Content Include="assets\cornwatch.png">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </Content>
     <Content Include="UI\Dashboard\dashboard.html">
@@ -25,11 +32,26 @@
 
   <ItemGroup>
     <!-- WebView2 for the HTML dashboard panel -->
-    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2365.46" />
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4129.50" />
     <!-- WMI for hardware data (temps, drives) -->
-    <PackageReference Include="System.Management" Version="9.0.0" />
-    <!-- JSON serialization for data bridge -->
-    <PackageReference Include="System.Text.Json" Version="8.0.5" />
+    <PackageReference Include="System.Management" Version="10.0.11" />
+    <!-- System.Text.Json ships in-box with net10.0 — no explicit package needed -->
   </ItemGroup>
+
+  <!--
+    The WebView2 package ships both a WinForms and a WPF assembly variant.
+    MSBuild pulls in Microsoft.Web.WebView2.Wpf.dll even though this is a
+    WinForms-only app (UseWPF is never set), and that WPF assembly depends
+    on a newer WindowsBase than the WinForms desktop pack provides — causing
+    an "MSB3277: conflicts between different versions of WindowsBase" warning.
+    Nothing in this project references the Wpf namespace, so drop that
+    reference after it's resolved rather than just suppressing the warning.
+  -->
+  <Target Name="RemoveWebView2Wpf" AfterTargets="ResolveAssemblyReferences">
+    <ItemGroup>
+      <ReferencePath Remove="@(ReferencePath)"
+                     Condition="'%(ReferencePath.FileName)' == 'Microsoft.Web.WebView2.Wpf'" />
+    </ItemGroup>
+  </Target>
 
 </Project>

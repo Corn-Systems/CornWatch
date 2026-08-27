@@ -4,45 +4,81 @@ namespace CornWatch.Core;
 
 public class ProcessEntry
 {
-    public string Name       { get; set; } = string.Empty;
-    public int    Pid        { get; set; }
-    public float  CpuPercent { get; set; }
-    public long   RamBytes   { get; set; }
+    public string Name          { get; set; } = string.Empty;
+    public int    Pid           { get; set; }
+    public int    InstanceCount { get; set; } = 1;
+    public float  CpuPercent    { get; set; }
+    public long   RamBytes      { get; set; }
 }
 
 /// <summary>
-/// Samples the top N processes by CPU usage.
-/// Uses two PerformanceCounter reads spaced 1 second apart to calculate %.
+/// Samples the top N process groups by CPU usage.
+/// CPU % is calculated from the TotalProcessorTime delta between two
+/// consecutive Read() calls, normalized by core count so 100% = whole machine.
+/// Processes with the same name are grouped (like Task Manager) so 20 chrome
+/// instances show as one "chrome (20)" row with summed CPU/RAM.
 /// </summary>
 public sealed class ProcessWatchdog : IDisposable
 {
     private readonly int _topN;
-    private readonly Dictionary<int, (PerformanceCounter counter, long prevTicks)> _tracked = [];
+    private readonly int _coreCount = Math.Max(1, Environment.ProcessorCount);
+
+    private Dictionary<int, TimeSpan> _prevCpuTimes = [];
+    private DateTime _prevSampleUtc = DateTime.MinValue;
     private bool _disposed;
 
     public ProcessWatchdog(int topN = 8) => _topN = topN;
 
     public List<ProcessEntry> Read()
     {
-        var results = new List<ProcessEntry>();
+        if (_disposed) return [];
+
+        var groups       = new Dictionary<string, ProcessEntry>(StringComparer.OrdinalIgnoreCase);
+        var nextCpuTimes = new Dictionary<int, TimeSpan>();
+        var nowUtc       = DateTime.UtcNow;
+        var elapsedMs    = _prevSampleUtc == DateTime.MinValue
+            ? 0.0
+            : (nowUtc - _prevSampleUtc).TotalMilliseconds;
+
         try
         {
-            var procs = Process.GetProcesses()
-                .Where(p => p.Id > 4) // skip System/Idle
-                .ToList();
-
-            foreach (var proc in procs)
+            foreach (var proc in Process.GetProcesses())
             {
                 try
                 {
-                    results.Add(new ProcessEntry
+                    if (proc.Id <= 4) continue; // skip System / Idle
+
+                    float cpu = 0f;
+                    try
                     {
-                        Name     = proc.ProcessName,
-                        Pid      = proc.Id,
-                        RamBytes = proc.WorkingSet64,
-                        // CPU % via processor time delta
-                        CpuPercent = GetCpuPercent(proc),
-                    });
+                        // Delta of processor time between samples → true CPU %
+                        var total = proc.TotalProcessorTime;
+                        nextCpuTimes[proc.Id] = total;
+                        if (elapsedMs > 0 && _prevCpuTimes.TryGetValue(proc.Id, out var prev))
+                        {
+                            var deltaMs = (total - prev).TotalMilliseconds;
+                            cpu = Math.Clamp(
+                                (float)(deltaMs / elapsedMs / _coreCount * 100.0), 0f, 100f);
+                        }
+                    }
+                    catch { } // access denied on protected processes — RAM is still useful
+
+                    if (groups.TryGetValue(proc.ProcessName, out var entry))
+                    {
+                        entry.InstanceCount++;
+                        entry.CpuPercent += cpu;
+                        entry.RamBytes   += proc.WorkingSet64;
+                    }
+                    else
+                    {
+                        groups[proc.ProcessName] = new ProcessEntry
+                        {
+                            Name       = proc.ProcessName,
+                            Pid        = proc.Id,
+                            CpuPercent = cpu,
+                            RamBytes   = proc.WorkingSet64,
+                        };
+                    }
                 }
                 catch { }
                 finally { proc.Dispose(); }
@@ -50,28 +86,20 @@ public sealed class ProcessWatchdog : IDisposable
         }
         catch { }
 
-        return results
+        _prevCpuTimes  = nextCpuTimes;
+        _prevSampleUtc = nowUtc;
+
+        return groups.Values
             .OrderByDescending(p => p.CpuPercent)
             .ThenByDescending(p => p.RamBytes)
             .Take(_topN)
             .ToList();
     }
 
-    private static float GetCpuPercent(Process proc)
-    {
-        try
-        {
-            // Quick approximation: TotalProcessorTime delta isn't meaningful on first call
-            // so we return 0 initially. A proper implementation would cache prev values.
-            return 0f; // Will be enhanced with PerformanceCounter in next iteration
-        }
-        catch { return 0f; }
-    }
-
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
-        foreach (var (counter, _) in _tracked.Values) counter.Dispose();
+        _prevCpuTimes.Clear();
     }
 }

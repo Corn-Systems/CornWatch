@@ -10,6 +10,9 @@ public class SystemSnapshot
 {
     public DateTime Timestamp { get; set; } = DateTime.Now;
 
+    // ── System ───────────────────────────────────────────────────────────────
+    public long UptimeSeconds { get; set; }
+
     // ── CPU ──────────────────────────────────────────────────────────────────
     public float CpuTotalUsage { get; set; }
     public float[] CpuCoreUsages { get; set; } = [];

@@ -100,7 +100,7 @@
 
   /* ── Process / bottom row ── */
   #proc-card { grid-column:1/4; }
-  .proc-table { width:100%; border-collapse:collapse; font-size:11px; }
+  .proc-table { width:100%; border-collapse:collapse; font-size:11px; table-layout:fixed; }
   .proc-table th { color:var(--muted); text-align:left; padding:0 8px 4px 0; font-weight:normal; font-size:10px; letter-spacing:.1em; text-transform:uppercase; }
   .proc-table td { padding:3px 8px 3px 0; border-top:1px solid var(--border); }
   .proc-bar { display:inline-block; height:4px; border-radius:2px; background:var(--green); vertical-align:middle; transition:width .4s; }
@@ -114,6 +114,7 @@
     <span class="app-title">CornWatch</span>
     <span style="font-size:11px;color:var(--muted)" id="cpu-name">—</span>
     <div class="header-right">
+      <span id="uptime" title="System uptime"></span>
       <span id="timestamp">—</span>
       <div id="health-badge"><span class="dot"></span><span id="health-val">—</span></div>
     </div>
@@ -227,10 +228,13 @@
           <button onclick="bridge('resmon')"  class="ctrl-btn">Res Monitor</button>
         </div>
         <div style="display:flex;gap:6px">
-          <button onclick="exportSnapshot()" class="ctrl-btn" style="color:var(--green)">Export Snapshot</button>
-          <button onclick="toggleStartup()"  class="ctrl-btn" id="startup-btn">Startup: ...</button>
+          <button onclick="exportSnapshot()" class="ctrl-btn" style="color:var(--green)">Export JSON</button>
+          <button onclick="exportPng()"      class="ctrl-btn" style="color:var(--blue)">Export PNG</button>
         </div>
-        <button onclick="showSensorDump()" class="ctrl-btn" style="color:var(--amber);font-size:10px">GPU Debug</button>
+        <div style="display:flex;gap:6px">
+          <button onclick="toggleStartup()"  class="ctrl-btn" id="startup-btn">Startup: ...</button>
+          <button onclick="showSensorDump()" class="ctrl-btn" style="color:var(--amber);font-size:10px">GPU Debug</button>
+        </div>
       </div>
     </div>
 
@@ -256,6 +260,24 @@
             R: <span id="disk-read">0</span> MB/s &nbsp; W: <span id="disk-write">0</span> MB/s
           </div>
           <div id="disk-bars" style="display:flex;flex-direction:column;gap:8px;margin-top:10px"></div>
+        </div>
+
+        <div style="flex:1.2;min-width:250px;overflow:hidden;display:flex;flex-direction:column">
+          <span class="card-label">Top Processes</span>
+          <div style="flex:1;overflow-y:auto;margin-top:6px">
+            <table class="proc-table">
+              <thead>
+                <tr>
+                  <th>Process</th>
+                  <th style="width:92px">CPU</th>
+                  <th style="width:70px">Mem</th>
+                </tr>
+              </thead>
+              <tbody id="proc-tbody">
+                <tr><td colspan="3" style="color:var(--muted)">Sampling...</td></tr>
+              </tbody>
+            </table>
+          </div>
         </div>
 
       </div>
@@ -288,6 +310,18 @@ function coreColor(v) {
   const r = v > 80 ? 224 : v > 50 ? 200 : 60;
   const g = v > 80 ? 84  : v > 50 ? 150 : 207;
   return `rgb(${r},${g},80)`;
+}
+
+// Accepts "critical" / "Critical" / 2 — never throws on either shape
+function sevClass(sev) {
+  if (typeof sev === 'number') return ['info','warning','critical'][sev] || 'info';
+  return String(sev || 'info').toLowerCase();
+}
+
+function fmtUptime(s) {
+  if (!s || s <= 0) return '';
+  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+  return d > 0 ? `up ${d}d ${h}h` : h > 0 ? `up ${h}h ${m}m` : `up ${m}m`;
 }
 
 function setRing(id, pct, color) {
@@ -325,8 +359,11 @@ window.cornWatch = {
   onSnapshot(snap) {
 
     // Header
-    document.getElementById('cpu-name').textContent  = snap.cpuName || '—';
+    const cpuLabel = (snap.cpuName || '—') +
+      (snap.cpuBaseSpeedMhz > 0 ? ` @ ${(snap.cpuBaseSpeedMhz/1000).toFixed(1)} GHz` : '');
+    document.getElementById('cpu-name').textContent  = cpuLabel;
     document.getElementById('timestamp').textContent = new Date(snap.timestamp).toLocaleTimeString();
+    document.getElementById('uptime').textContent    = fmtUptime(snap.uptimeSeconds);
     const hv = document.getElementById('health-val');
     hv.textContent = `${snap.healthScore}/100`;
     hv.style.color = pctColor(100 - snap.healthScore);
@@ -407,13 +444,12 @@ window.cornWatch = {
     document.getElementById('disk-read').textContent  = snap.diskReadMbps.toFixed(1);
     document.getElementById('disk-write').textContent = snap.diskWriteMbps.toFixed(1);
 
-    // Disk bars
-    const diskContainer = document.getElementById('disk-bars');
-    diskContainer.innerHTML = '';
-    (snap.disks || []).forEach(d => {
+    // Disk bars (built as one string — repeated innerHTML += re-parses the
+    // container every iteration and causes flicker)
+    document.getElementById('disk-bars').innerHTML = (snap.disks || []).map(d => {
       const pct = Math.round(d.usagePercent);
       const freeGb = (d.freeBytes / 1073741824).toFixed(0);
-      diskContainer.innerHTML += `
+      return `
         <div class="disk-row">
           <div class="disk-header">
             <span>${d.driveLetter} ${d.label || ''}</span>
@@ -424,7 +460,7 @@ window.cornWatch = {
           </div>
           <div style="font-size:9px;color:#555">${freeGb} GB free</div>
         </div>`;
-    });
+    }).join('');
 
     // CPU core heatmap
     const heatmap = document.getElementById('cpu-heatmap');
@@ -446,7 +482,7 @@ window.cornWatch = {
     list.innerHTML = alerts.length === 0
       ? '<div class="no-alerts">All systems nominal ✓</div>'
       : alerts.map(a => `
-          <div class="alert-item ${a.severity.toLowerCase()}">
+          <div class="alert-item ${sevClass(a.severity)}">
             <div class="alert-cat">${a.category}</div>
             ${a.message}
           </div>`).join('');
@@ -458,6 +494,11 @@ async function exportSnapshot() {
     const path = await window.chrome.webview.hostObjects.cornBridge.ExportSnapshot();
     alert('Saved to:\n' + path);
   } catch(e) { alert('Export unavailable: ' + e); }
+}
+
+async function exportPng() {
+  try { await window.chrome.webview.hostObjects.cornBridge.ExportPng(); }
+  catch(e) { alert('PNG export unavailable: ' + e); }
 }
 
 async function toggleStartup() {
@@ -486,13 +527,20 @@ async function initStartupBtn() {
 
 function updateProcessTable(procs) {
   const tbody = document.getElementById('proc-tbody');
-  if (!tbody || !procs?.length) return;
+  if (!tbody) return;
+  if (!procs?.length) { return; } // keep "Sampling..." row until first data
   tbody.innerHTML = procs.map(p => {
-    const mb = (p.ramBytes / 1048576).toFixed(0);
+    const mb   = (p.ramBytes / 1048576).toFixed(0);
+    const cpu  = Math.min(100, p.cpuPercent || 0);
+    const name = p.instanceCount > 1 ? `${p.name} (${p.instanceCount})` : p.name;
+    const barW = Math.max(2, Math.round(cpu * 0.4)); // 0–40px mini bar
     return `<tr>
-      <td style="max-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${p.name}</td>
-      <td style="color:var(--muted)">${p.pid}</td>
-      <td style="color:var(--amber)">${mb} MB</td>
+      <td style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="PID ${p.pid}">${name}</td>
+      <td style="white-space:nowrap">
+        <span class="proc-bar" style="width:${barW}px;background:${pctColor(cpu)}"></span>
+        <span style="color:${pctColor(cpu)}"> ${cpu.toFixed(1)}%</span>
+      </td>
+      <td style="color:var(--amber);white-space:nowrap">${mb} MB</td>
     </tr>`;
   }).join('');
 }

@@ -25,8 +25,14 @@ public sealed class SystemMonitor : IDisposable
     private readonly PerformanceCounter _netRecv;
     private readonly GpuMonitor _gpuMonitor;
     private readonly ProcessWatchdog _procWatchdog;
+    private readonly string _adapterName;
     public string GpuSensorDump => _gpuMonitor.DebugSensorDump;
     private bool _disposed;
+
+    // Cached once — CPU name and base clock don't change at runtime,
+    // so no need to hit WMI for them every second.
+    private static string _cachedCpuName = string.Empty;
+    private static int    _cachedCpuBaseMhz;
 
     public SystemMonitor()
     {
@@ -44,9 +50,15 @@ public sealed class SystemMonitor : IDisposable
         _diskWrite = new PerformanceCounter("PhysicalDisk", "Disk Write Bytes/sec", "_Total");
 
         var netCategory = new PerformanceCounterCategory("Network Interface");
-        var adapter = netCategory.GetInstanceNames()
-            .FirstOrDefault(n => !n.Contains("Loopback", StringComparison.OrdinalIgnoreCase))
-            ?? netCategory.GetInstanceNames().FirstOrDefault() ?? "Ethernet";
+        var instances   = netCategory.GetInstanceNames();
+        string[] virtualHints =
+            ["loopback", "isatap", "teredo", "bluetooth", "virtual",
+             "vmware", "vbox", "vethernet", "tunnel", "tap-"];
+        var adapter = instances.FirstOrDefault(n =>
+                !virtualHints.Any(v => n.Contains(v, StringComparison.OrdinalIgnoreCase)))
+            ?? instances.FirstOrDefault(n => !n.Contains("Loopback", StringComparison.OrdinalIgnoreCase))
+            ?? instances.FirstOrDefault() ?? "Ethernet";
+        _adapterName = adapter;
 
         _netSent = new PerformanceCounter("Network Interface", "Bytes Sent/sec",     adapter);
         _netRecv = new PerformanceCounter("Network Interface", "Bytes Received/sec", adapter);
@@ -61,6 +73,18 @@ public sealed class SystemMonitor : IDisposable
         _timer = new System.Threading.Timer(_ => Poll(), null,
             TimeSpan.FromMilliseconds(500),
             TimeSpan.FromMilliseconds(PollIntervalMs));
+    }
+
+    /// <summary>
+    /// Changes the polling rate at runtime (PollIntervalMs alone never
+    /// reprogrammed the timer). Used to ease off to 5s while in the tray.
+    /// </summary>
+    public void SetPollInterval(int ms)
+    {
+        if (_disposed || ms < 250) return;
+        PollIntervalMs = ms;
+        try { _timer.Change(TimeSpan.Zero, TimeSpan.FromMilliseconds(ms)); }
+        catch { }
     }
 
     private void Poll()
@@ -80,6 +104,8 @@ public sealed class SystemMonitor : IDisposable
             DiskWriteMbps       = _diskWrite.NextValue() / 1_048_576f,
             NetworkSentMbps     = _netSent.NextValue() / 1_048_576f,
             NetworkReceivedMbps = _netRecv.NextValue() / 1_048_576f,
+            ActiveAdapterName   = _adapterName,
+            UptimeSeconds       = Environment.TickCount64 / 1000,
         };
 
         EnrichFromWmi(snap);
@@ -111,18 +137,23 @@ public sealed class SystemMonitor : IDisposable
     // ── WMI ───────────────────────────────────────────────────────────────────
     private static void EnrichFromWmi(SystemSnapshot snap)
     {
-        try
+        if (string.IsNullOrEmpty(_cachedCpuName))
         {
-            using var searcher = new ManagementObjectSearcher(
-                "SELECT Name, CurrentClockSpeed FROM Win32_Processor");
-            foreach (ManagementObject obj in searcher.Get())
+            try
             {
-                snap.CpuName        = obj["Name"]?.ToString()?.Trim() ?? string.Empty;
-                snap.CpuBaseSpeedMhz = Convert.ToInt32(obj["CurrentClockSpeed"]);
-                break;
+                using var searcher = new ManagementObjectSearcher(
+                    "SELECT Name, CurrentClockSpeed FROM Win32_Processor");
+                foreach (ManagementObject obj in searcher.Get())
+                {
+                    _cachedCpuName    = obj["Name"]?.ToString()?.Trim() ?? string.Empty;
+                    _cachedCpuBaseMhz = Convert.ToInt32(obj["CurrentClockSpeed"]);
+                    break;
+                }
             }
+            catch { }
         }
-        catch { }
+        snap.CpuName         = _cachedCpuName;
+        snap.CpuBaseSpeedMhz = _cachedCpuBaseMhz;
 
         try
         {
