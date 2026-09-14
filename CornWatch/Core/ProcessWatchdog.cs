@@ -14,7 +14,7 @@ public class ProcessEntry
 /// <summary>
 /// Samples the top N process groups by CPU usage.
 /// CPU % is calculated from the TotalProcessorTime delta between two
-/// consecutive Read() calls, normalized by core count so 100% = whole machine.
+/// consecutive Read() calls, normalised by core count so 100% = whole machine.
 /// Processes with the same name are grouped (like Task Manager) so 20 chrome
 /// instances show as one "chrome (20)" row with summed CPU/RAM.
 /// </summary>
@@ -51,7 +51,6 @@ public sealed class ProcessWatchdog : IDisposable
                     float cpu = 0f;
                     try
                     {
-                        // Delta of processor time between samples → true CPU %
                         var total = proc.TotalProcessorTime;
                         nextCpuTimes[proc.Id] = total;
                         if (elapsedMs > 0 && _prevCpuTimes.TryGetValue(proc.Id, out var prev))
@@ -61,7 +60,7 @@ public sealed class ProcessWatchdog : IDisposable
                                 (float)(deltaMs / elapsedMs / _coreCount * 100.0), 0f, 100f);
                         }
                     }
-                    catch { } // access denied on protected processes — RAM is still useful
+                    catch { /* access denied on protected processes — RAM is still useful */ }
 
                     if (groups.TryGetValue(proc.ProcessName, out var entry))
                     {
@@ -80,11 +79,11 @@ public sealed class ProcessWatchdog : IDisposable
                         };
                     }
                 }
-                catch { }
+                catch (Exception ex) { SessionLog.Write("PROC_ENTRY", ex); }
                 finally { proc.Dispose(); }
             }
         }
-        catch { }
+        catch (Exception ex) { SessionLog.Write("PROC_READ", ex); }
 
         _prevCpuTimes  = nextCpuTimes;
         _prevSampleUtc = nowUtc;

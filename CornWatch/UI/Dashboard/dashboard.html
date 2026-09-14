@@ -238,7 +238,7 @@
       </div>
     </div>
 
-    <!-- Bottom row: cores + net + disk -->
+    <!-- Bottom row: cores + net + disk + processes -->
     <div class="card" id="proc-card" style="gap:8px">
       <div style="display:flex;gap:24px;flex:1;overflow:hidden">
 
@@ -287,6 +287,8 @@
 </div>
 
 <script>
+'use strict';
+
 const HIST = 60;
 const cpuHist = Array(HIST).fill(0);
 const ramHist = Array(HIST).fill(0);
@@ -296,6 +298,16 @@ const netDown = Array(80).fill(0);
 const netCanvas = document.getElementById('net-canvas');
 const netCtx    = netCanvas.getContext('2d');
 
+// ── XSS-safe text helper ─────────────────────────────────────────────────────
+// All user-supplied strings (process names, drive labels, adapter names) must
+// go through esc() before they touch the DOM via innerHTML.
+function esc(str) {
+  const d = document.createElement('div');
+  d.appendChild(document.createTextNode(str ?? ''));
+  return d.innerHTML;
+}
+
+// ── Colour helpers ───────────────────────────────────────────────────────────
 function pctColor(v) {
   if (v > 85) return '#e05454';
   if (v > 65) return '#f2b04a';
@@ -312,7 +324,7 @@ function coreColor(v) {
   return `rgb(${r},${g},80)`;
 }
 
-// Accepts "critical" / "Critical" / 2 — never throws on either shape
+// Accepts "critical" / "Critical" / 2 — never throws on either shape.
 function sevClass(sev) {
   if (typeof sev === 'number') return ['info','warning','critical'][sev] || 'info';
   return String(sev || 'info').toLowerCase();
@@ -333,7 +345,9 @@ function setRing(id, pct, color) {
 function renderSparkline(svgId, data, color) {
   const svg = document.getElementById(svgId);
   const W = 200, H = 28, max = Math.max(...data, 1);
-  const pts = data.map((v,i) => `${(i/(data.length-1)*W).toFixed(1)},${(H-(v/max*H)).toFixed(1)}`).join(' ');
+  const pts = data.map((v,i) =>
+    `${(i/(data.length-1)*W).toFixed(1)},${(H-(v/max*H)).toFixed(1)}`).join(' ');
+  // Safe: pts contains only numbers and spaces — no user strings.
   svg.innerHTML = `<polyline class="spark-path" points="${pts}" stroke="${color}" opacity=".6"/>`;
 }
 
@@ -354,7 +368,7 @@ function drawNetChart() {
   line(netDown,'#6fcf6f'); line(netUp,'#f2b04a');
 }
 
-// ── Main snapshot handler ─────────────────────────────────────────
+// ── Main snapshot handler ────────────────────────────────────────────────────
 window.cornWatch = {
   onSnapshot(snap) {
 
@@ -375,8 +389,16 @@ window.cornWatch = {
     setRing('cpu-ring', cpuPct);
     cpuHist.push(cpuPct); cpuHist.shift();
     renderSparkline('cpu-spark', cpuHist, pctColor(cpuPct));
-    if (snap.cpuTemperature > 0)
-      document.getElementById('cpu-temp').textContent = `Temp: ${snap.cpuTemperature.toFixed(0)}°C`;
+
+    // CPU temp — show "N/A (run as admin)" when CpuTempAvailable is false.
+    const tempEl = document.getElementById('cpu-temp');
+    if (!snap.cpuTempAvailable) {
+      tempEl.textContent = 'Temp: N/A — run as admin';
+      tempEl.style.color = 'var(--muted)';
+    } else if (snap.cpuTemperature > 0) {
+      tempEl.textContent = `Temp: ${snap.cpuTemperature.toFixed(0)}°C`;
+      tempEl.style.color = tempColor(snap.cpuTemperature);
+    }
 
     // RAM
     const ramPct = Math.round(snap.ramUsagePercent);
@@ -397,30 +419,41 @@ window.cornWatch = {
       document.getElementById('gpu-pct').style.color     = '#5ab4e8';
       setRing('gpu-ring', gpuPct, '#5ab4e8');
 
-      const tc = tempColor(gpu.temperatureCelsius);
-      document.getElementById('gpu-temp').textContent    = gpu.temperatureCelsius > 0 ? `${gpu.temperatureCelsius.toFixed(0)}°C` : '—';
-      document.getElementById('gpu-temp').style.color    = tc;
+      // GPU temp — show N/A when vendor SDK not integrated (temp === 0 and fan === 0 and power === 0)
+      const gpuTempEl = document.getElementById('gpu-temp');
+      const hasGpuThermal = gpu.temperatureCelsius > 0 || gpu.fanRpm > 0 || gpu.powerWatts > 0;
+      if (!hasGpuThermal) {
+        gpuTempEl.textContent = 'N/A';
+        gpuTempEl.style.color = 'var(--muted)';
+        gpuTempEl.title       = 'GPU thermal data requires vendor SDK (AMD ADLX / NVIDIA NVML)';
+      } else {
+        const tc = tempColor(gpu.temperatureCelsius);
+        gpuTempEl.textContent = gpu.temperatureCelsius > 0 ? `${gpu.temperatureCelsius.toFixed(0)}°C` : '—';
+        gpuTempEl.style.color = tc;
+        gpuTempEl.title       = '';
+      }
 
       const vramPct = Math.round(gpu.vramUsagePercent);
-      document.getElementById('gpu-vram').textContent    = gpu.vramTotalMb > 0
+      document.getElementById('gpu-vram').textContent = gpu.vramTotalMb > 0
         ? `${(gpu.vramUsedMb/1024).toFixed(1)} / ${(gpu.vramTotalMb/1024).toFixed(1)} GB`
         : '—';
       document.getElementById('gpu-vram-bar').style.width      = vramPct + '%';
       document.getElementById('gpu-vram-bar').style.background = pctColor(vramPct);
 
-      document.getElementById('gpu-fan').textContent    = gpu.fanRpm > 0 ? `${Math.round(gpu.fanRpm)} RPM` : '—';
+      document.getElementById('gpu-fan').textContent     = gpu.fanRpm    > 0 ? `${Math.round(gpu.fanRpm)} RPM`    : 'N/A';
       document.getElementById('gpu-compute').textContent = gpu.computeUsagePercent > 0 ? `${gpu.computeUsagePercent.toFixed(1)}%` : '—';
-      document.getElementById('gpu-power').textContent  = gpu.powerWatts > 0 ? `${gpu.powerWatts.toFixed(0)} W` : '—';
+      document.getElementById('gpu-power').textContent   = gpu.powerWatts > 0 ? `${gpu.powerWatts.toFixed(0)} W` : 'N/A';
 
       // D3D engine breakdown (AMD-specific)
-      const engines = gpu.d3DEngines || {};
+      const engines    = gpu.d3DEngines || {};
       const engineKeys = Object.keys(engines).filter(k => engines[k] > 0);
       const d3dEl = document.getElementById('gpu-d3d-engines');
       if (d3dEl) {
         if (engineKeys.length > 0) {
+          // Safe: engineKeys come from a known key set; engine values are numbers.
           d3dEl.innerHTML = engineKeys.map(k =>
             `<div class="gpu-stat-row">
-              <span class="gpu-stat-label" style="font-size:9px">${k.replace('D3D ','')}</span>
+              <span class="gpu-stat-label" style="font-size:9px">${esc(k.replace('D3D ',''))}</span>
               <span class="gpu-stat-val" style="font-size:11px;color:var(--blue)">${engines[k].toFixed(1)}%</span>
             </div>`
           ).join('');
@@ -433,8 +466,9 @@ window.cornWatch = {
     }
 
     // Net
-    document.getElementById('net-up').textContent    = snap.networkSentMbps.toFixed(2);
-    document.getElementById('net-down').textContent  = snap.networkReceivedMbps.toFixed(2);
+    document.getElementById('net-up').textContent      = snap.networkSentMbps.toFixed(2);
+    document.getElementById('net-down').textContent    = snap.networkReceivedMbps.toFixed(2);
+    // Safe: use textContent for adapter name (user-controlled string).
     document.getElementById('net-adapter').textContent = snap.activeAdapterName || '—';
     netUp.push(snap.networkSentMbps);       netUp.shift();
     netDown.push(snap.networkReceivedMbps); netDown.shift();
@@ -444,15 +478,14 @@ window.cornWatch = {
     document.getElementById('disk-read').textContent  = snap.diskReadMbps.toFixed(1);
     document.getElementById('disk-write').textContent = snap.diskWriteMbps.toFixed(1);
 
-    // Disk bars (built as one string — repeated innerHTML += re-parses the
-    // container every iteration and causes flicker)
+    // Disk bars — esc() on driveLetter and label (both can be unusual on user machines)
     document.getElementById('disk-bars').innerHTML = (snap.disks || []).map(d => {
-      const pct = Math.round(d.usagePercent);
+      const pct    = Math.round(d.usagePercent);
       const freeGb = (d.freeBytes / 1073741824).toFixed(0);
       return `
         <div class="disk-row">
           <div class="disk-header">
-            <span>${d.driveLetter} ${d.label || ''}</span>
+            <span>${esc(d.driveLetter)} ${esc(d.label || '')}</span>
             <span style="color:${pctColor(pct)}">${pct}%</span>
           </div>
           <div class="disk-bar-wrap">
@@ -466,7 +499,9 @@ window.cornWatch = {
     const heatmap = document.getElementById('cpu-heatmap');
     const cores = snap.cpuCoreUsages || [];
     if (heatmap.children.length !== cores.length) {
-      heatmap.innerHTML = cores.map((_,i) => `<div class="core-cell" id="core-${i}">${i}</div>`).join('');
+      // Core indices are numbers — safe to use directly.
+      heatmap.innerHTML = cores.map((_,i) =>
+        `<div class="core-cell" id="core-${i}">${i}</div>`).join('');
     }
     cores.forEach((v,i) => {
       const cell = document.getElementById(`core-${i}`);
@@ -477,14 +512,14 @@ window.cornWatch = {
     updateProcessTable(snap.processes);
 
     // Alerts
-    const list = document.getElementById('alert-list');
+    const list   = document.getElementById('alert-list');
     const alerts = snap.alerts || [];
     list.innerHTML = alerts.length === 0
       ? '<div class="no-alerts">All systems nominal ✓</div>'
       : alerts.map(a => `
           <div class="alert-item ${sevClass(a.severity)}">
-            <div class="alert-cat">${a.category}</div>
-            ${a.message}
+            <div class="alert-cat">${esc(a.category)}</div>
+            ${esc(a.message)}
           </div>`).join('');
   }
 };
@@ -528,12 +563,13 @@ async function initStartupBtn() {
 function updateProcessTable(procs) {
   const tbody = document.getElementById('proc-tbody');
   if (!tbody) return;
-  if (!procs?.length) { return; } // keep "Sampling..." row until first data
+  if (!procs?.length) return; // keep "Sampling..." row until first data
+  // esc() on process name — fully user-controlled string.
   tbody.innerHTML = procs.map(p => {
     const mb   = (p.ramBytes / 1048576).toFixed(0);
     const cpu  = Math.min(100, p.cpuPercent || 0);
-    const name = p.instanceCount > 1 ? `${p.name} (${p.instanceCount})` : p.name;
-    const barW = Math.max(2, Math.round(cpu * 0.4)); // 0–40px mini bar
+    const name = p.instanceCount > 1 ? `${esc(p.name)} (${p.instanceCount})` : esc(p.name);
+    const barW = Math.max(2, Math.round(cpu * 0.4));
     return `<tr>
       <td style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="PID ${p.pid}">${name}</td>
       <td style="white-space:nowrap">
@@ -549,7 +585,12 @@ async function showSensorDump() {
   try {
     const dump = await window.chrome.webview.hostObjects.cornBridge.GetGpuSensorDump();
     const w = window.open('', '_blank', 'width=700,height=500');
-    w.document.write('<pre style="background:#0a0a0a;color:#6fcf6f;font-family:monospace;font-size:12px;padding:16px;white-space:pre-wrap">' + (dump || 'No sensor data yet — wait a second and try again.') + '</pre>');
+    // Safe: dump is plain diagnostic text from C# — escape it before writing.
+    const pre = w.document.createElement('pre');
+    pre.style.cssText = 'background:#0a0a0a;color:#6fcf6f;font-family:monospace;font-size:12px;padding:16px;white-space:pre-wrap';
+    pre.textContent = dump || 'No sensor data yet — wait a second and try again.';
+    w.document.body.style.margin = '0';
+    w.document.body.appendChild(pre);
   } catch(e) { alert('Bridge unavailable: ' + e); }
 }
 

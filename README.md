@@ -2,7 +2,7 @@
 
 > *"Keeping an eye on your kernel"*
 
-A companion utility to [Win11 Optimizer](https://github.com/Corn-Studios/win11op).
+A companion utility to [Win11 Optimizer](https://github.com/Corn-Systems/win11op).
 Real-time system health monitoring with a terminal-aesthetic WebView2 dashboard.
 
 ---
@@ -18,10 +18,11 @@ Real-time system health monitoring with a terminal-aesthetic WebView2 dashboard.
 | **CPU Core Heatmap** | Per-core colour-coded usage grid                          |
 | **Disk I/O & Space** | R/W MB/s, per-drive fill bars                             |
 | **Top Processes**    | Live top-8 process groups by CPU% (grouped like Task Mgr) |
-| **Health Alerts**    | Auto-generated warnings + critical flags                  |
-| **Health Score**     | Composite 0–100 rating                                    |
+| **Health Alerts**    | Auto-generated warnings + critical flags (configurable)   |
+| **Health Score**     | Composite 0–100 rating with 24-hour history               |
 | **Snapshot Export**  | One-click JSON or PNG snapshot to Documents               |
 | **Tray Mode**        | Minimizes to tray, optional launch-at-startup toggle      |
+| **Update Check**     | Background check against GitHub Releases on startup       |
 
 While minimized to the tray, polling automatically slows to 5s to stay out
 of the way; it returns to live 1s updates when the window is reopened.
@@ -32,7 +33,13 @@ of the way; it returns to live 1s updates when the window is reopened.
 
 ```
 CornWatch/
-├── Program.cs                   Entry point
+├── Program.cs                   Entry point (single-instance, crash handler)
+├── AppInfo.cs                   Version, repo URL, User-Agent strings
+├── AppPaths.cs                  All on-disk paths in one place
+├── AppSettings.cs               User preferences + SettingsManager
+├── SessionLog.cs                Persistent daily log + SystemInfo helper
+├── UpdateChecker.cs             GitHub Releases version check
+├── HealthHistory.cs             Rolling 24-hour health score ring buffer
 ├── Core/
 │   ├── SystemMonitor.cs         Background polling engine (1s ticks)
 │   ├── GpuMonitor.cs            GPU Engine counters + DXGI VRAM query
@@ -82,30 +89,63 @@ System APIs (PerformanceCounter + WMI + DXGI)
 dotnet restore
 dotnet run
 ```
-> **Note:** CPU temperature readings via WMI may require running as Administrator.
-> GPU temperature/fan/power require vendor SDK integration (see Planned Features).
+
+> **Note:** CPU temperature readings via WMI require running as Administrator.
+> GPU temperature, fan speed, and power draw require vendor SDK integration
+> (see Planned Features). The dashboard shows **N/A** for unavailable sensors
+> rather than silently displaying zero.
+
+---
+
+## Settings & Persistence
+
+User preferences are stored at `%AppData%\CornSystems\CornWatch\settings.json`
+and survive reinstalls. Configurable values include:
+
+- Poll interval (default 1 s, slows to 5 s in tray)
+- Window size and state
+- Start minimized to tray
+- All alert thresholds (CPU %, CPU temp, RAM %, disk %, GPU temp, VRAM %)
+- Update check on/off
+
+Health score history (last 24 hours at 1 s resolution) is stored alongside
+settings in `history.json` and persists across restarts.
+
+---
+
+## Installer
+
+A ready-to-compile Inno Setup 6 script (`CornWatch.iss`) is included next to
+the `.csproj`. It produces a per-machine installer to `Program Files\CornWatch`
+with Desktop and Start Menu shortcuts, an uninstaller entry, and an optional
+WebView2 Evergreen bootstrapper.
+
+```
+dotnet publish -c Release
+ISCC.exe CornWatch.iss
+# → installer_output\CornWatch-Setup-<version>.exe
+```
 
 ---
 
 ## Planned Features
 
-- [ ] GPU temp/fan/clock/power via AMD ADLX + NVIDIA NVML
-- [ ] Historical data persistence (SQLite)
-- [ ] Configurable alert thresholds
+- [ ] GPU temp / fan / clock / power via AMD ADLX + NVIDIA NVML
+- [ ] Configurable alert thresholds in the UI (settings panel)
 - [ ] Tray balloon notifications on critical alerts
-- [ ] Dark/light theme toggle
+- [ ] Dark / light theme toggle
 
 ---
 
 ## Related Projects
 
-- [Win11 Optimizer](https://github.com/Corn-Studios/win11op) — Windows performance & privacy tweaks
-- [CornDownloader](https://github.com/ConnorCorn07/CornDownloader) — Utility auto-downloader for fresh installs
-- [CornTools](https://github.com/Corn-Studios/CornTools) — Unified Corn Studios launcher
+- [Win11 Optimizer](https://github.com/Corn-Systems/win11op) — Windows performance & privacy tweaks
+- [CornDownloader](https://github.com/Corn-Systems/CornDownloader) — Utility auto-downloader for fresh installs
+- [CornTools](https://github.com/Corn-Systems/CornTools) — Unified Corn Systems launcher
 
 ---
 
 ## Credits
 
-Built by Corn Studios with development assistance from Claude by Anthropic.
+Built by Corn Systems with development assistance from Claude by Anthropic.
 Licensed under MIT.

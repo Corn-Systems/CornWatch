@@ -6,30 +6,28 @@ using CornWatch.Models;
 namespace CornWatch.Core;
 
 /// <summary>
-/// Exports the current SystemSnapshot as formatted JSON.
-/// Saved to the user's Documents folder with a timestamp filename.
+/// Exports the current SystemSnapshot as formatted JSON to the Snapshots folder.
+/// Path is centralised in AppPaths — nothing else calls GetFolderPath for this.
 /// </summary>
 public static class SnapshotExporter
 {
     private static readonly JsonSerializerOptions _opts = new()
     {
-        WriteIndented = true,
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
+        WriteIndented            = true,
+        PropertyNamingPolicy     = JsonNamingPolicy.CamelCase,
+        Converters               = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
     };
 
     public static string Export(SystemSnapshot snap)
     {
-        var dir  = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
-            "CornWatch", "Snapshots");
-        Directory.CreateDirectory(dir);
+        AppPaths.EnsureSnapshotsDir();
 
         var filename = $"snapshot_{snap.Timestamp:yyyy-MM-dd_HH-mm-ss}.json";
-        var path     = Path.Combine(dir, filename);
+        var path     = Path.Combine(AppPaths.SnapshotsDir, filename);
 
         var json = JsonSerializer.Serialize(snap, _opts);
         File.WriteAllText(path, json, Encoding.UTF8);
+        SessionLog.Write($"[EXPORT] JSON snapshot written to {path}");
         return path;
     }
 }

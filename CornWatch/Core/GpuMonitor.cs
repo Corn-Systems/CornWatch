@@ -16,17 +16,17 @@ public sealed class GpuMonitor : IDisposable
     private readonly List<PerformanceCounter> _computeCounters = [];
     private readonly List<PerformanceCounter> _videoCounters   = [];
     private readonly List<PerformanceCounter> _vramCounters    = [];
-    private string _dgpuLuid   = string.Empty;
-    private string _dgpuName   = "GPU";
-    private float  _dgpuVramMb = 0f;
-    private bool   _disposed;
+    private          string                   _dgpuLuid        = string.Empty;
+    private          string                   _dgpuName        = "GPU";
+    private          float                    _dgpuVramMb;
+    private          bool                     _disposed;
 
     public string DebugSensorDump { get; private set; } = string.Empty;
 
     public GpuMonitor()
     {
-        _dgpuName = ReadGpuNameFromWmi();
-        _dgpuLuid = FindDgpuLuid();
+        _dgpuName   = ReadGpuNameFromWmi();
+        _dgpuLuid   = FindDgpuLuid();
         InitCounters();
         _dgpuVramMb = DxgiVram.GetDedicatedVramMb(_dgpuName);
     }
@@ -44,13 +44,17 @@ public sealed class GpuMonitor : IDisposable
                 if (string.IsNullOrEmpty(name)) continue;
                 if (name.Contains("Microsoft Basic", StringComparison.OrdinalIgnoreCase)) continue;
                 if (name.Contains("Virtual",         StringComparison.OrdinalIgnoreCase)) continue;
-                if (!name.Contains("Radeon(TM) Graphics", StringComparison.OrdinalIgnoreCase))
-                    return name;
+                // Prefer a dedicated GPU over an iGPU — check for common iGPU phrases.
+                bool isIgpu = name.Contains("Radeon(TM) Graphics", StringComparison.OrdinalIgnoreCase)
+                           || name.Contains("Intel",               StringComparison.OrdinalIgnoreCase)
+                           || name.Contains("UHD",                 StringComparison.OrdinalIgnoreCase)
+                           || name.Contains("Iris",                StringComparison.OrdinalIgnoreCase);
+                if (!isIgpu) return name;
                 fallback = name;
             }
             if (!string.IsNullOrEmpty(fallback)) return fallback;
         }
-        catch { }
+        catch (Exception ex) { SessionLog.Write("GPU_WMI_NAME", ex); }
         return "GPU";
     }
 
@@ -92,7 +96,7 @@ public sealed class GpuMonitor : IDisposable
                 return chosen;
             }
         }
-        catch (Exception ex) { DebugSensorDump = "LUID scan failed: " + ex.Message; }
+        catch (Exception ex) { DebugSensorDump = "LUID scan failed: " + ex.Message; SessionLog.Write("GPU_LUID", ex); }
         return string.Empty;
     }
 
@@ -113,7 +117,7 @@ public sealed class GpuMonitor : IDisposable
                     else if (inst.Contains("engtype_Compute", StringComparison.OrdinalIgnoreCase)) _computeCounters.Add(c);
                     else if (inst.Contains("engtype_Video",   StringComparison.OrdinalIgnoreCase)) _videoCounters.Add(c);
                 }
-                catch { }
+                catch (Exception ex) { SessionLog.Write($"[GPU] engine counter '{inst}'", ex); }
             }
 
             try
@@ -128,16 +132,16 @@ public sealed class GpuMonitor : IDisposable
                         _ = c.NextValue();
                         _vramCounters.Add(c);
                     }
-                    catch { }
+                    catch (Exception ex) { SessionLog.Write($"[GPU] VRAM counter '{inst}'", ex); }
                 }
             }
-            catch { }
+            catch (Exception ex) { SessionLog.Write("GPU_VRAM_COUNTERS", ex); }
 
             DebugSensorDump += $"\n3D={_3dCounters.Count} Compute={_computeCounters.Count} " +
                                $"VRAM-used-counters={_vramCounters.Count} " +
                                $"VRAM-total={_dgpuVramMb:0}MB (set after init)";
         }
-        catch (Exception ex) { DebugSensorDump += "\nCounter init error: " + ex.Message; }
+        catch (Exception ex) { SessionLog.Write("GPU_COUNTER_INIT", ex); }
     }
 
     public List<GpuInfo> Read()
@@ -145,15 +149,21 @@ public sealed class GpuMonitor : IDisposable
         var info = new GpuInfo { Name = _dgpuName, VramTotalMb = _dgpuVramMb };
 
         float load = 0f;
-        foreach (var c in _3dCounters) try { load += c.NextValue(); } catch { }
+        foreach (var c in _3dCounters)
+            try { load += c.NextValue(); }
+            catch (Exception ex) { SessionLog.Write("GPU_READ_3D", ex); }
         info.UsagePercent = Math.Min(100f, load);
 
         float compute = 0f;
-        foreach (var c in _computeCounters) try { compute = Math.Max(compute, c.NextValue()); } catch { }
+        foreach (var c in _computeCounters)
+            try { compute = Math.Max(compute, c.NextValue()); }
+            catch (Exception ex) { SessionLog.Write("GPU_READ_COMPUTE", ex); }
         info.ComputeUsagePercent = compute;
 
         float vramBytes = 0f;
-        foreach (var c in _vramCounters) try { vramBytes += c.NextValue(); } catch { }
+        foreach (var c in _vramCounters)
+            try { vramBytes += c.NextValue(); }
+            catch (Exception ex) { SessionLog.Write("GPU_READ_VRAM", ex); }
         info.VramUsedMb = vramBytes / 1024f / 1024f;
 
         if (info.VramTotalMb > 0)
@@ -193,49 +203,28 @@ internal static class DxgiVram
     private static readonly Guid IID_IDXGIFactory1 = new("770aae78-f26f-4dba-a829-253c83d1b387");
     private static readonly Guid IID_IDXGIAdapter3 = new("645967a4-1392-4310-a798-8053ce3e93fd");
 
-    // IDXGIFactory1 vtable: [0]QueryInterface [1]AddRef [2]Release [3]SetPrivateData
-    // [4]SetPrivateDataInterface [5]GetPrivateData [6]GetParent
-    // [7]EnumAdapters [8]MakeWindowAssociation [9]GetWindowAssociation [10]CreateSwapChain
-    // [11]CreateSoftwareAdapter [12]EnumAdapters1 [13]IsCurrent
-    private const int EnumAdapters1Slot = 12;
-
-    // IDXGIAdapter vtable: [0-6] IUnknown+IDXGIObject, [7]EnumOutputs [8]GetDesc [9]CheckInterfaceSupport
-    // IDXGIAdapter1: [10]GetDesc1
-    // IDXGIAdapter2: [11]GetDesc2
-    // IDXGIAdapter3: [12]RegisterHardwareContentProtectionTeardownStatusEvent
-    //                [13]UnregisterHardwareContentProtectionTeardownStatus
-    //                [14]QueryVideoMemoryInfo  ← THIS IS WHAT WE WANT
-    //                [15]SetVideoMemoryReservation [16]RegisterVideoMemoryBudgetChangeNotificationEvent
-    //                [17]UnregisterVideoMemoryBudgetChangeNotification
+    private const int EnumAdapters1Slot        = 12;
+    private const int GetDesc1Slot             = 10;
     private const int QueryVideoMemoryInfoSlot = 14;
 
     [StructLayout(LayoutKind.Sequential)]
     private struct DXGI_QUERY_VIDEO_MEMORY_INFO
     {
-        public ulong Budget;
-        public ulong CurrentUsage;
-        public ulong AvailableForReservation;
-        public ulong CurrentReservation;
+        public ulong Budget, CurrentUsage, AvailableForReservation, CurrentReservation;
     }
 
     private enum DXGI_MEMORY_SEGMENT_GROUP { Local = 0, NonLocal = 1 }
 
-    // DXGI_ADAPTER_DESC1 — used to match adapter by name
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     private struct DXGI_ADAPTER_DESC1
     {
         [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
         public string Description;
         public uint VendorId, DeviceId, SubSysId, Revision;
-        public UIntPtr DedicatedVideoMemory;
-        public UIntPtr DedicatedSystemMemory;
-        public UIntPtr SharedSystemMemory;
-        public long AdapterLuid;
-        public uint Flags;
+        public UIntPtr DedicatedVideoMemory, DedicatedSystemMemory, SharedSystemMemory;
+        public long    AdapterLuid;
+        public uint    Flags;
     }
-
-    // IDXGIAdapter1 vtable slot 10 = GetDesc1
-    private const int GetDesc1Slot = 10;
 
     public static float GetDedicatedVramMb(string gpuNameHint)
     {
@@ -247,7 +236,6 @@ internal static class DxgiVram
 
             try
             {
-                // EnumAdapters1(index, out adapter)
                 var enumAdapters1 = Marshal.GetDelegateForFunctionPointer<EnumAdapters1Delegate>(
                     Marshal.ReadIntPtr(Marshal.ReadIntPtr(factoryPtr), EnumAdapters1Slot * IntPtr.Size));
 
@@ -258,24 +246,24 @@ internal static class DxgiVram
                     if (hr != 0 || adapterPtr == IntPtr.Zero) break;
                     try
                     {
-                        // Read adapter description to match against our target GPU name
                         var getDesc1 = Marshal.GetDelegateForFunctionPointer<GetDesc1Delegate>(
                             Marshal.ReadIntPtr(Marshal.ReadIntPtr(adapterPtr), GetDesc1Slot * IntPtr.Size));
                         var desc = new DXGI_ADAPTER_DESC1();
                         getDesc1(adapterPtr, ref desc);
 
-                        // Skip if name doesn't match our dGPU — avoids summing iGPU + dGPU budgets
-                        if (!string.IsNullOrEmpty(gpuNameHint) &&
-                            !desc.Description.Contains("RX", StringComparison.OrdinalIgnoreCase) &&
-                            !gpuNameHint.Contains(desc.Description.Split(' ')[0], StringComparison.OrdinalIgnoreCase))
+                        // Skip adapters that don't match our target GPU name.
+                        // The previous check was AMD-specific ("RX"); use a
+                        // broader first-word match that works for any vendor.
+                        bool nameMatches = string.IsNullOrEmpty(gpuNameHint)
+                            || desc.Description.Contains(
+                                gpuNameHint.Split(' ')[0], StringComparison.OrdinalIgnoreCase);
+
+                        if (!nameMatches)
                         {
-                            var releaseSkip = Marshal.GetDelegateForFunctionPointer<ReleaseDelegate>(
-                                Marshal.ReadIntPtr(Marshal.ReadIntPtr(adapterPtr), 2 * IntPtr.Size));
-                            releaseSkip(adapterPtr);
+                            Release(adapterPtr);
                             continue;
                         }
 
-                        // QI for IDXGIAdapter3 to call QueryVideoMemoryInfo
                         var adapter3Guid = IID_IDXGIAdapter3;
                         var qi = Marshal.GetDelegateForFunctionPointer<QueryInterfaceDelegate>(
                             Marshal.ReadIntPtr(Marshal.ReadIntPtr(adapterPtr), 0));
@@ -287,47 +275,34 @@ internal static class DxgiVram
                                     Marshal.ReadIntPtr(Marshal.ReadIntPtr(adapter3Ptr), QueryVideoMemoryInfoSlot * IntPtr.Size));
                                 var info = new DXGI_QUERY_VIDEO_MEMORY_INFO();
                                 if (qvmi(adapter3Ptr, 0, DXGI_MEMORY_SEGMENT_GROUP.Local, ref info) == 0 && info.Budget > 0)
-                                {
-                                    // Return immediately — we matched the specific dGPU
                                     return info.Budget / 1024f / 1024f;
-                                }
                             }
-                            finally
-                            {
-                                var release3 = Marshal.GetDelegateForFunctionPointer<ReleaseDelegate>(
-                                    Marshal.ReadIntPtr(Marshal.ReadIntPtr(adapter3Ptr), 2 * IntPtr.Size));
-                                release3(adapter3Ptr);
-                            }
+                            finally { Release(adapter3Ptr); }
                         }
                     }
-                    finally
-                    {
-                        var releaseAdp = Marshal.GetDelegateForFunctionPointer<ReleaseDelegate>(
-                            Marshal.ReadIntPtr(Marshal.ReadIntPtr(adapterPtr), 2 * IntPtr.Size));
-                        releaseAdp(adapterPtr);
-                    }
+                    finally { Release(adapterPtr); }
                 }
                 return 0f;
             }
-            finally
-            {
-                var releaseFactory = Marshal.GetDelegateForFunctionPointer<ReleaseDelegate>(
-                    Marshal.ReadIntPtr(Marshal.ReadIntPtr(factoryPtr), 2 * IntPtr.Size));
-                releaseFactory(factoryPtr);
-            }
+            finally { Release(factoryPtr); }
         }
-        catch { return 0f; }
+        catch (Exception ex) { SessionLog.Write("DXGI_VRAM", ex); return 0f; }
     }
 
-    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
-    private delegate int QueryInterfaceDelegate(IntPtr self, ref Guid riid, out IntPtr ppvObject);
-    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
-    private delegate int GetDesc1Delegate(IntPtr self, ref DXGI_ADAPTER_DESC1 pDesc);
-    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
-    private delegate uint ReleaseDelegate(IntPtr self);
-    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
-    private delegate int EnumAdapters1Delegate(IntPtr self, uint index, out IntPtr ppAdapter);
-    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
-    private delegate int QueryVideoMemoryInfoDelegate(IntPtr self, uint nodeIndex,
-        DXGI_MEMORY_SEGMENT_GROUP group, ref DXGI_QUERY_VIDEO_MEMORY_INFO pVideoMemoryInfo);
+    private static void Release(IntPtr ptr)
+    {
+        try
+        {
+            var rel = Marshal.GetDelegateForFunctionPointer<ReleaseDelegate>(
+                Marshal.ReadIntPtr(Marshal.ReadIntPtr(ptr), 2 * IntPtr.Size));
+            rel(ptr);
+        }
+        catch { }
+    }
+
+    [UnmanagedFunctionPointer(CallingConvention.StdCall)] private delegate int  QueryInterfaceDelegate(IntPtr self, ref Guid riid, out IntPtr ppvObject);
+    [UnmanagedFunctionPointer(CallingConvention.StdCall)] private delegate int  GetDesc1Delegate(IntPtr self, ref DXGI_ADAPTER_DESC1 pDesc);
+    [UnmanagedFunctionPointer(CallingConvention.StdCall)] private delegate uint ReleaseDelegate(IntPtr self);
+    [UnmanagedFunctionPointer(CallingConvention.StdCall)] private delegate int  EnumAdapters1Delegate(IntPtr self, uint index, out IntPtr ppAdapter);
+    [UnmanagedFunctionPointer(CallingConvention.StdCall)] private delegate int  QueryVideoMemoryInfoDelegate(IntPtr self, uint nodeIndex, DXGI_MEMORY_SEGMENT_GROUP group, ref DXGI_QUERY_VIDEO_MEMORY_INFO pVideoMemoryInfo);
 }

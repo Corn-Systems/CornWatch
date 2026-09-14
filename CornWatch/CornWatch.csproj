@@ -4,21 +4,47 @@
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>
     <UseWindowsForms>true</UseWindowsForms>
-    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
-    <ApplicationIcon>assets\cornwatch.ico</ApplicationIcon>
     <AssemblyName>CornWatch</AssemblyName>
     <RootNamespace>CornWatch</RootNamespace>
-    <Nullable>enable</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Company>Corn Studios</Company>
-    <Product>CornWatch</Product>
-    <Copyright>Corn Studios 2026</Copyright>
+
+    <!-- Match the Corn Systems stack — disable nullable/implicit usings. -->
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <Optimize>true</Optimize>
+
+    <!-- DPI awareness declared in app.manifest; belt-and-suspenders in Program.cs -->
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <ApplicationIcon>assets\cornwatch.ico</ApplicationIcon>
+    <NoWarn>$(NoWarn);WFO0003</NoWarn>
+
+    <!-- Single source of truth for the version.  AppInfo.cs reads it via
+         AssemblyInformationalVersionAttribute; never hardcode elsewhere. -->
     <Version>0.2.0</Version>
+    <Company>Corn Systems</Company>
+    <Authors>Corn Systems</Authors>
+    <Product>CornWatch</Product>
+    <Description>Real-time system health dashboard by Corn Systems</Description>
+    <Copyright>© 2026 Corn Systems</Copyright>
+    <RepositoryUrl>https://github.com/Corn-Systems/CornWatch</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/Corn-Systems/CornWatch</PackageProjectUrl>
+
+    <!-- Publish defaults: single self-contained win-x64 exe.
+         `dotnet publish -c Release` → bin\Release\net10.0-windows\win-x64\publish\CornWatch.exe
+         The .iss picks it up from there. -->
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <PublishReadyToRun>false</PublishReadyToRun>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <DebugType>embedded</DebugType>
   </PropertyGroup>
 
   <ItemGroup>
     <!-- Folder on disk is lowercase "assets" — casing must match exactly
-         or case-sensitive build environments (Linux CI) fail to find these -->
+         or case-sensitive build environments (Linux CI) fail to find these. -->
     <Content Include="assets\cornwatch.ico">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </Content>

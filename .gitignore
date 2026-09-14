@@ -19,9 +19,26 @@ publish/
 
 # ── NuGet ────────────────────────────────────────────────────
 *.nupkg
+*.snupkg
 packages/
 project.lock.json
+.nuget/
 
 # ── Logs & temp ──────────────────────────────────────────────
 *.log
 *.tmp
+
+# ── App data / settings (generated at runtime) ───────────────
+settings.json
+history.json
+
+# ── Inno Setup output ─────────────────────────────────────────
+installer_output/
+
+# ── WebView2 bootstrapper (downloaded separately — see .iss) ──
+MicrosoftEdgeWebView2Setup.exe
+
+# ── OS junk ──────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
