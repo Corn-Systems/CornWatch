@@ -7,16 +7,20 @@
     <AssemblyName>CornWatch</AssemblyName>
     <RootNamespace>CornWatch</RootNamespace>
 
-    <!-- Match the Corn Systems stack — disable nullable/implicit usings. -->
-    <Nullable>disable</Nullable>
-    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
     <Optimize>true</Optimize>
 
     <!-- DPI awareness declared in app.manifest; belt-and-suspenders in Program.cs -->
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <ApplicationIcon>assets\cornwatch.ico</ApplicationIcon>
-    <NoWarn>$(NoWarn);WFO0003</NoWarn>
+    <!-- WFO0003: WinForms obsolete API used internally by WebView2 WinForms wrapper.
+         MSB3277: WindowsBase version conflict caused by WebView2 shipping both a WinForms
+         and a WPF assembly — the WPF one pulls in a newer WindowsBase. The RemoveWebView2Wpf
+         target below drops the WPF assembly, but MSBuild still emits the warning during
+         dependency resolution before the target fires, so we suppress it here too. -->
+    <NoWarn>$(NoWarn);WFO0003;MSB3277</NoWarn>
 
     <!-- Single source of truth for the version.  AppInfo.cs reads it via
          AssemblyInformationalVersionAttribute; never hardcode elsewhere. -->

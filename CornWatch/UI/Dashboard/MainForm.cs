@@ -288,7 +288,7 @@ public partial class MainForm : Form
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    private static void OpenInExplorer(string path)
+    internal static void OpenInExplorer(string path)
     {
         try
         {
