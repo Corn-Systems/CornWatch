@@ -100,11 +100,11 @@ public partial class MainForm : Form
                 _trayIcon?.ShowBalloonTip(
                     6000,
                     "CornWatch update available",
-                    $"Version {info.LatestTag} is available — click to download.",
+                    $"Version {info.LatestTag ?? "?"} is available — click to download.",
                     ToolTipIcon.Info);
 
                 if (_trayIcon is not null)
-                    _trayIcon.BalloonTipClicked += (_, _) => OpenUrl(info.ReleaseUrl);
+                    _trayIcon.BalloonTipClicked += (_, _) => OpenUrl(info.ReleaseUrl ?? AppInfo.ReleasesUrl);
             }
         }
         catch (Exception ex) { SessionLog.Write("UPDATE_CHECK", ex); }

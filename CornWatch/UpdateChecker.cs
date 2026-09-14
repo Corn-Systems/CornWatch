@@ -5,9 +5,9 @@ namespace CornWatch;
 
 internal sealed class UpdateInfo
 {
-    public bool   IsNewer    { get; init; }
-    public string LatestTag  { get; init; }
-    public string ReleaseUrl { get; init; }
+    public bool    IsNewer    { get; init; }
+    public string? LatestTag  { get; init; }
+    public string? ReleaseUrl { get; init; }
 }
 
 // Non-blocking check against GitHub Releases.
@@ -23,7 +23,7 @@ internal static class UpdateChecker
         _http.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
     }
 
-    public static async Task<UpdateInfo> CheckAsync(CancellationToken ct = default)
+    public static async Task<UpdateInfo?> CheckAsync(CancellationToken ct = default)
     {
         try
         {
@@ -35,10 +35,10 @@ internal static class UpdateChecker
                 return null;
             }
 
-            using var doc  = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
-            var root       = doc.RootElement;
-            string tag     = root.TryGetProperty("tag_name", out var t) ? t.GetString() : null;
-            string html    = root.TryGetProperty("html_url",  out var h) ? h.GetString() : AppInfo.ReleasesUrl;
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
+            var root      = doc.RootElement;
+            string? tag   = root.TryGetProperty("tag_name", out var t) ? t.GetString() : null;
+            string? html  = root.TryGetProperty("html_url",  out var h) ? h.GetString() : AppInfo.ReleasesUrl;
             if (string.IsNullOrWhiteSpace(tag)) return null;
 
             bool newer = IsNewer(tag, AppInfo.Version);

@@ -45,7 +45,7 @@ internal static class SettingsManager
     private static readonly JsonSerializerOptions _json =
         new() { WriteIndented = true };
 
-    private static AppSettings _current = null;
+    private static AppSettings? _current;
 
     public static AppSettings Current => _current ??= Load();
 

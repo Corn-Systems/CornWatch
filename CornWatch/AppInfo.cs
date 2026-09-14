@@ -13,7 +13,7 @@ internal static class AppInfo
     public const string RepoUrl     = "https://github.com/" + RepoOwner + "/" + RepoName;
     public const string ReleasesUrl = RepoUrl + "/releases";
 
-    private static string _version = null;
+    private static string? _version;
 
     // Read from <Version> in the .csproj (via AssemblyInformationalVersion),
     // stripped of any "+commit" suffix SourceLink might append.
@@ -29,7 +29,7 @@ internal static class AppInfo
                 if (string.IsNullOrWhiteSpace(info))
                     info = asm.GetName().Version?.ToString(3);
                 int plus = info?.IndexOf('+') ?? -1;
-                _version = plus > 0 ? info[..plus] : (info ?? "0.0.0");
+                _version = plus > 0 ? info![..plus] : (info ?? "0.0.0");
             }
             catch { _version = "0.0.0"; }
             return _version;
