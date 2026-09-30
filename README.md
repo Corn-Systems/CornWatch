@@ -37,7 +37,7 @@ CornWatch/
 ├── AppInfo.cs                   Version, repo URL, User-Agent strings
 ├── AppPaths.cs                  All on-disk paths in one place
 ├── AppSettings.cs               User preferences + SettingsManager
-├── SessionLog.cs                Persistent daily log + SystemInfo helper
+├── SessionLog.cs                Persistent daily log
 ├── UpdateChecker.cs             GitHub Releases version check
 ├── HealthHistory.cs             Rolling 24-hour health score ring buffer
 ├── Core/
@@ -46,13 +46,13 @@ CornWatch/
 │   ├── ProcessWatchdog.cs       Top-N process sampling (CPU delta based)
 │   ├── SnapshotExporter.cs      JSON snapshot export
 │   ├── StartupManager.cs        HKCU Run key startup toggle
-│   └── AdlxBridge.cs            AMD ADLX stub (temps/fan — planned)
+│   └── Wmi.cs                   Disposing WMI query helper
 ├── Models/
 │   └── SystemSnapshot.cs        Data model serialised to JSON
 └── UI/
     └── Dashboard/
         ├── MainForm.cs           WinForms host + WebView2 + tray + JS bridge
-        └── dashboard.html        HTML/CSS/JS dashboard frontend
+        └── Dashboard.html        HTML/CSS/JS dashboard frontend
 ```
 
 **Data flow:**
@@ -62,9 +62,9 @@ System APIs (PerformanceCounter + WMI + DXGI)
        ↓
   SystemMonitor (background thread)
        ↓  SystemSnapshot (JSON)
-  MainForm.PushToJs()
+  mainForm.onSnapshotReady()
        ↓  ExecuteScriptAsync
-  dashboard.html → window.cornWatch.onSnapshot()
+  Dashboard.html → window.cornWatch.onSnapshot()
        ↓
   DOM updates (gauges, charts, tables, alerts)
 ```

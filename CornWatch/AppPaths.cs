@@ -1,42 +1,36 @@
 namespace CornWatch;
 
 // Every on-disk path the app uses, in one place.
-// Nothing else in the codebase calls Path.Combine(Environment.GetFolderPath(...), ...)
-// directly — go through here instead.
-internal static class AppPaths
+internal static class appPaths
 {
-    public const string Vendor    = "CornSystems";
-    public const string AppFolder = "CornWatch";
+    public static string dataDir { get; } = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "CornSystems", appInfo.name);
 
-    public static string DataDir =>
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                     Vendor, AppFolder);
+    public static string settingsFile { get; } = Path.Combine(dataDir, "settings.json");
+    public static string historyFile { get; } = Path.Combine(dataDir, "history.json");
+    public static string logsDir { get; } = Path.Combine(dataDir, "logs");
 
-    public static string SettingsFile => Path.Combine(DataDir, "settings.json");
-    public static string CrashLog     => Path.Combine(DataDir, "crash.log");
-    public static string LogsDir      => Path.Combine(DataDir, "logs");
+    private static string snapshotsDir { get; } = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), appInfo.name, "Snapshots");
 
-    // Snapshot exports go to Documents\CornWatch\Snapshots — same location
-    // used by SnapshotExporter and ExportPngFromUi.
-    public static string SnapshotsDir =>
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
-                     AppFolder, "Snapshots");
-
-    // History DB lives alongside settings, not in Snapshots.
-    public static string HistoryFile => Path.Combine(DataDir, "history.json");
-
-    public static void EnsureDataDir()
+    public static void ensureDir(string dir)
     {
-        try { Directory.CreateDirectory(DataDir); } catch { /* best-effort */ }
+        try { Directory.CreateDirectory(dir); } catch { /* best-effort */ }
     }
 
-    public static void EnsureLogsDir()
+    // Documents\CornWatch\Snapshots\snapshot_<timestamp>.<ext>; creates the folder.
+    public static string snapshotFile(DateTime timestamp, string ext)
     {
-        try { Directory.CreateDirectory(LogsDir); } catch { }
+        ensureDir(snapshotsDir);
+        return Path.Combine(snapshotsDir, $"snapshot_{timestamp:yyyy-MM-dd_HH-mm-ss}.{ext}");
     }
 
-    public static void EnsureSnapshotsDir()
+    // Temp-file then rename so a crash mid-write can't corrupt the target.
+    public static void writeAtomic(string file, string text)
     {
-        try { Directory.CreateDirectory(SnapshotsDir); } catch { }
+        ensureDir(dataDir);
+        var tmp = file + ".tmp";
+        File.WriteAllText(tmp, text);
+        File.Move(tmp, file, overwrite: true);
     }
 }

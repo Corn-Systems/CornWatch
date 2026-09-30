@@ -3,69 +3,66 @@ using System.Text.Json;
 
 namespace CornWatch;
 
-internal sealed class UpdateInfo
+internal sealed class updateInfo
 {
-    public bool    IsNewer    { get; init; }
-    public string? LatestTag  { get; init; }
-    public string? ReleaseUrl { get; init; }
+    public bool isNewer { get; init; }
+    public string? latestTag { get; init; }
+    public string? releaseUrl { get; init; }
 }
 
 // Non-blocking check against GitHub Releases.
 // Never throws; returns null when the check couldn't complete
 // (offline, rate-limited, API shape changed).
-internal static class UpdateChecker
+internal static class updateChecker
 {
-    private static readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(8) };
-
-    static UpdateChecker()
+    private static readonly HttpClient http = new()
     {
-        _http.DefaultRequestHeaders.UserAgent.ParseAdd(AppInfo.UserAgent);
-        _http.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
-    }
+        Timeout = TimeSpan.FromSeconds(8),
+        DefaultRequestHeaders = { { "User-Agent", appInfo.userAgent }, { "Accept", "application/vnd.github+json" } },
+    };
 
-    public static async Task<UpdateInfo?> CheckAsync(CancellationToken ct = default)
+    public static async Task<updateInfo?> checkAsync(CancellationToken ct = default)
     {
         try
         {
-            string url = $"https://api.github.com/repos/{AppInfo.RepoOwner}/{AppInfo.RepoName}/releases/latest";
-            using var resp = await _http.GetAsync(url, ct);
+            using var resp = await http.GetAsync(
+                $"https://api.github.com/repos/{appInfo.repoOwner}/{appInfo.repoName}/releases/latest", ct);
             if (!resp.IsSuccessStatusCode)
             {
-                SessionLog.Write($"[UPDATE] GitHub returned {(int)resp.StatusCode}");
+                sessionLog.write($"[UPDATE] GitHub returned {(int)resp.StatusCode}");
                 return null;
             }
 
             using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
-            var root      = doc.RootElement;
-            string? tag   = root.TryGetProperty("tag_name", out var t) ? t.GetString() : null;
-            string? html  = root.TryGetProperty("html_url",  out var h) ? h.GetString() : AppInfo.ReleasesUrl;
+            string? get(string prop) =>
+                doc.RootElement.TryGetProperty(prop, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+
+            var tag = get("tag_name");
             if (string.IsNullOrWhiteSpace(tag)) return null;
 
-            bool newer = IsNewer(tag, AppInfo.Version);
-            SessionLog.Write($"[UPDATE] latest={tag} current={AppInfo.Version} newer={newer}");
-            return new UpdateInfo { IsNewer = newer, LatestTag = tag, ReleaseUrl = html };
+            var newer = isNewer(tag, appInfo.version);
+            sessionLog.write($"[UPDATE] latest={tag} current={appInfo.version} newer={newer}");
+            return new updateInfo { isNewer = newer, latestTag = tag, releaseUrl = get("html_url") ?? appInfo.releasesUrl };
         }
         catch (OperationCanceledException) { return null; }
         catch (Exception ex)
         {
-            SessionLog.Write("UPDATE", ex);
+            sessionLog.write("UPDATE", ex);
             return null;
         }
     }
 
-    internal static bool IsNewer(string remoteTag, string local)
-    {
-        if (!Version.TryParse(Normalize(remoteTag), out var remote))  return false;
-        if (!Version.TryParse(Normalize(local),     out var current)) return false;
-        return remote > current;
-    }
+    internal static bool isNewer(string remoteTag, string local) =>
+        Version.TryParse(normalize(remoteTag), out var remote)
+        && Version.TryParse(normalize(local), out var current)
+        && remote > current;
 
-    private static string Normalize(string v)
+    private static string normalize(string v)
     {
         if (string.IsNullOrWhiteSpace(v)) return "0.0.0";
         v = v.Trim();
-        if (v.StartsWith("v", StringComparison.OrdinalIgnoreCase)) v = v[1..];
-        int cut = v.IndexOfAny(['-', '+', ' ']);
+        if (v.StartsWith('v') || v.StartsWith('V')) v = v[1..];
+        var cut = v.IndexOfAny(['-', '+', ' ']);
         if (cut > 0) v = v[..cut];
         return v.Contains('.') ? v : v + ".0";
     }

@@ -1,5 +1,4 @@
-using System.Text.Json;
-using System.Text.Json.Serialization;
+using System.Diagnostics;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 using CornWatch.Core;
@@ -7,309 +6,85 @@ using CornWatch.Models;
 
 namespace CornWatch.UI.Dashboard;
 
-public partial class MainForm : Form
+public class mainForm : Form
 {
-    private readonly SystemMonitor _monitor;
-    private readonly AppSettings   _settings;
-    private WebView2?    _webView;
-    private NotifyIcon?  _trayIcon;
-    private bool         _webViewReady;
-    private SystemSnapshot? _lastSnap;
+    private readonly systemMonitor monitor;
+    private readonly appSettings settings = settingsManager.current;
+    private readonly NotifyIcon trayIcon;
+    private readonly CancellationTokenSource cts = new();
+    private WebView2? webView;
+    private volatile bool webViewReady;
+    private bool balloonShown;
 
-    private static readonly JsonSerializerOptions _jsonOpts = new()
+    internal systemSnapshot? lastSnapshot { get; private set; }
+
+    public mainForm(bool startMinimized = false)
     {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
-    };
-
-    public MainForm(bool startMinimized = false)
-    {
-        _settings = SettingsManager.Current;
-
-        InitializeComponent();
-        RestoreWindowGeometry();
-        InitTrayIcon();
-
-        _monitor = new SystemMonitor();
-        _monitor.PollIntervalMs = _settings.PollIntervalMs;
-        _monitor.SnapshotReady += OnSnapshotReady;
-
-        if (startMinimized)
-        {
-            WindowState   = FormWindowState.Minimized;
-            ShowInTaskbar = false;
-            Visible       = false;
-        }
-
-        // Fire-and-forget: check for updates after a short delay so the dashboard
-        // is already visible when the notification appears.
-        if (_settings.CheckForUpdates)
-            _ = CheckForUpdateAsync();
-    }
-
-    // ── Window geometry ───────────────────────────────────────────────────────
-
-    private void RestoreWindowGeometry()
-    {
-        Size = new Size(_settings.WindowWidth, _settings.WindowHeight);
-        if (_settings.WindowState == "Maximized")
-            WindowState = FormWindowState.Maximized;
-    }
-
-    private void SaveWindowGeometry()
-    {
-        if (WindowState == FormWindowState.Normal)
-        {
-            _settings.WindowWidth  = Width;
-            _settings.WindowHeight = Height;
-        }
-        _settings.WindowState = WindowState == FormWindowState.Maximized ? "Maximized" : "Normal";
-        SettingsManager.Save(_settings);
-    }
-
-    // ── Component initialisation ──────────────────────────────────────────────
-
-    private void InitializeComponent()
-    {
-        Text          = "🌽 CornWatch — System Health Dashboard";
-        MinimumSize   = new Size(960, 640);
+        Text = "🌽 CornWatch — System Health Dashboard";
+        MinimumSize = new Size(960, 640);
         StartPosition = FormStartPosition.CenterScreen;
-        BackColor     = Color.FromArgb(10, 10, 10);
+        BackColor = Color.FromArgb(10, 10, 10);
+        Size = new Size(settings.windowWidth, settings.windowHeight);
+        if (settings.windowState == "Maximized") WindowState = FormWindowState.Maximized;
 
         var icoPath = Path.Combine(AppContext.BaseDirectory, "assets", "cornwatch.ico");
         if (File.Exists(icoPath))
-        {
             try { Icon = new Icon(icoPath); }
-            catch (Exception ex) { SessionLog.Write("MAINFORM_ICON", ex); }
+            catch (Exception ex) { sessionLog.write("MAINFORM_ICON", ex); }
+
+        trayIcon = createTrayIcon();
+
+        monitor = new systemMonitor(settings.pollIntervalMs);
+        monitor.snapshotReady += onSnapshotReady;
+
+        if (startMinimized)
+        {
+            WindowState = FormWindowState.Minimized;
+            ShowInTaskbar = false;
+            Visible = false;
         }
 
-        _ = InitWebViewAsync();
+        _ = initWebViewAsync();
+        if (settings.checkForUpdates) _ = checkForUpdateAsync();
     }
 
-    // ── Update check ─────────────────────────────────────────────────────────
-
-    private async Task CheckForUpdateAsync()
+    internal static void launch(string file, string args = "")
     {
-        await Task.Delay(3000); // let the dashboard render first
+        try { using var proc = Process.Start(new ProcessStartInfo(file, args) { UseShellExecute = true }); }
+        catch (Exception ex) { sessionLog.write($"[SHELL] {file}", ex); }
+    }
+
+    internal static void openInExplorer(string path) => launch("explorer.exe", $"/select,\"{path}\"");
+
+    internal async void exportPngFromUi()
+    {
         try
         {
-            var info = await UpdateChecker.CheckAsync();
-            if (info?.IsNewer == true)
-            {
-                // Show a non-blocking tray balloon; clicking it opens the releases page.
-                _trayIcon?.ShowBalloonTip(
-                    6000,
-                    "CornWatch update available",
-                    $"Version {info.LatestTag ?? "?"} is available — click to download.",
-                    ToolTipIcon.Info);
+            if (webView?.CoreWebView2 is not { } core) return;
+            var path = appPaths.snapshotFile(DateTime.Now, "png");
+            await using (var fs = File.Create(path))
+                await core.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png, fs);
 
-                if (_trayIcon is not null)
-                    _trayIcon.BalloonTipClicked += (_, _) => OpenUrl(info.ReleaseUrl ?? AppInfo.ReleasesUrl);
-            }
+            sessionLog.write("[EXPORT] PNG written to " + path);
+            openInExplorer(path);
         }
-        catch (Exception ex) { SessionLog.Write("UPDATE_CHECK", ex); }
+        catch (Exception ex)
+        {
+            sessionLog.write("EXPORT_PNG", ex);
+            MessageBox.Show("PNG export failed: " + ex.Message, appInfo.name, MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
     }
 
-    // ── System tray ──────────────────────────────────────────────────────────
-
-    private void InitTrayIcon()
-    {
-        var menu = new ContextMenuStrip();
-        menu.Items.Add("Open CornWatch", null, (_, _) => ShowWindow());
-        menu.Items.Add(new ToolStripSeparator());
-
-        var startupItem = new ToolStripMenuItem("Launch at startup")
-        {
-            Checked      = StartupManager.IsEnabled,
-            CheckOnClick = true,
-        };
-        startupItem.CheckedChanged += (_, _) =>
-        {
-            try { StartupManager.Toggle(); }
-            catch (Exception ex)
-            {
-                MessageBox.Show("Could not update startup: " + ex.Message, "CornWatch",
-                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            }
-        };
-        menu.Items.Add(startupItem);
-        menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add("Exit", null, (_, _) =>
-        {
-            if (_trayIcon is not null) _trayIcon.Visible = false;
-            Application.Exit();
-        });
-
-        _trayIcon = new NotifyIcon
-        {
-            Text             = "CornWatch",
-            Icon             = Icon ?? SystemIcons.Application,
-            Visible          = true,
-            ContextMenuStrip = menu,
-        };
-        _trayIcon.DoubleClick += (_, _) => ShowWindow();
-    }
-
-    private void ShowWindow()
-    {
-        ShowInTaskbar = true;
-        Show();
-        WindowState   = FormWindowState.Normal;
-        Activate();
-        BringToFront();
-        _monitor.SetPollInterval(1000);
-    }
-
-    private bool _balloonShown;
     protected override void OnResize(EventArgs e)
     {
         base.OnResize(e);
-        if (WindowState == FormWindowState.Minimized)
-        {
-            ShowInTaskbar = false;
-            Hide();
-            _monitor.SetPollInterval(5000);
-            if (!_balloonShown)
-            {
-                _trayIcon?.ShowBalloonTip(2000, "CornWatch",
-                    "Minimised to tray — double-click to restore", ToolTipIcon.Info);
-                _balloonShown = true;
-            }
-        }
+        if (WindowState != FormWindowState.Minimized) return;
+
+        hideToTray();
+        if (balloonShown) return;
+        balloonShown = true;
+        trayIcon.ShowBalloonTip(2000, appInfo.name, "Minimised to tray — double-click to restore", ToolTipIcon.Info);
     }
-
-    // ── WebView2 ─────────────────────────────────────────────────────────────
-
-    private async Task InitWebViewAsync()
-    {
-        try
-        {
-            _webView = new WebView2 { Dock = DockStyle.Fill };
-            Controls.Add(_webView);
-
-            try
-            {
-                await _webView.EnsureCoreWebView2Async();
-            }
-            catch (Exception ex)
-            {
-                SessionLog.Write("WEBVIEW2_INIT", ex);
-                // WebView2 Runtime not installed — show a plain fallback label.
-                Controls.Remove(_webView);
-                _webView.Dispose();
-                _webView = null;
-                ShowWebView2FallbackUi();
-                return;
-            }
-
-            _webView.CoreWebView2.AddHostObjectToScript("cornBridge",
-                new CornBridge(this, _monitor));
-
-#if !DEBUG
-            _webView.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
-            _webView.CoreWebView2.Settings.IsStatusBarEnabled            = false;
-            _webView.CoreWebView2.Settings.AreDevToolsEnabled            = false;
-#endif
-
-            var htmlPath = Path.Combine(AppContext.BaseDirectory,
-                "UI", "Dashboard", "dashboard.html");
-
-            // Use Uri.AbsoluteUri instead of raw string replace for spec-correct file:/// URL.
-            string url = File.Exists(htmlPath)
-                ? new Uri(htmlPath).AbsoluteUri
-                : "about:blank";
-
-            _webView.CoreWebView2.Navigate(url);
-            _webView.CoreWebView2.NavigationCompleted += (_, _) => _webViewReady = true;
-        }
-        catch (Exception ex)
-        {
-            SessionLog.Write("WEBVIEW2_SETUP", ex);
-        }
-    }
-
-    private void ShowWebView2FallbackUi()
-    {
-        var label = new Label
-        {
-            Text      = "⚠  WebView2 Runtime is not installed.\n\n" +
-                        "Download it from:\nhttps://developer.microsoft.com/en-us/microsoft-edge/webview2/\n\n" +
-                        "Restart CornWatch after installing.",
-            Dock      = DockStyle.Fill,
-            TextAlign = ContentAlignment.MiddleCenter,
-            ForeColor = Color.FromArgb(242, 176, 74),
-            BackColor = Color.FromArgb(10, 10, 10),
-            Font      = new Font("Courier New", 10f),
-        };
-        Controls.Add(label);
-    }
-
-    // ── Data bridge ──────────────────────────────────────────────────────────
-
-    private void OnSnapshotReady(SystemSnapshot snap)
-    {
-        _lastSnap = snap;
-        if (!_webViewReady || _webView is null) return;
-        var json = JsonSerializer.Serialize(snap, _jsonOpts);
-        if (InvokeRequired) Invoke(() => PushToJs(json));
-        else PushToJs(json);
-    }
-
-    internal void PushToJs(string json) =>
-        _ = _webView?.CoreWebView2.ExecuteScriptAsync($"window.cornWatch?.onSnapshot({json})");
-
-    internal SystemSnapshot? LastSnapshot => _lastSnap;
-
-    // ── PNG export ───────────────────────────────────────────────────────────
-
-    internal async void ExportPngFromUi()
-    {
-        try
-        {
-            if (_webView?.CoreWebView2 is null) return;
-            AppPaths.EnsureSnapshotsDir();
-            var path = Path.Combine(AppPaths.SnapshotsDir,
-                $"snapshot_{DateTime.Now:yyyy-MM-dd_HH-mm-ss}.png");
-
-            await using (var fs = File.Create(path))
-                await _webView.CoreWebView2.CapturePreviewAsync(
-                    CoreWebView2CapturePreviewImageFormat.Png, fs);
-
-            SessionLog.Write("[EXPORT] PNG written to " + path);
-            OpenInExplorer(path);
-        }
-        catch (Exception ex)
-        {
-            SessionLog.Write("EXPORT_PNG", ex);
-            MessageBox.Show("PNG export failed: " + ex.Message, "CornWatch",
-                MessageBoxButtons.OK, MessageBoxIcon.Error);
-        }
-    }
-
-    // ── Helpers ───────────────────────────────────────────────────────────────
-
-    internal static void OpenInExplorer(string path)
-    {
-        try
-        {
-            var p = System.Diagnostics.Process.Start("explorer.exe", $"/select,\"{path}\"");
-            if (p is null) SessionLog.Write("[SHELL] explorer.exe returned null handle");
-        }
-        catch (Exception ex) { SessionLog.Write("SHELL_EXPLORER", ex); }
-    }
-
-    internal static void OpenUrl(string url)
-    {
-        try
-        {
-            var p = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url)
-                { UseShellExecute = true });
-            if (p is null) SessionLog.Write($"[SHELL] browser launch returned null for {url}");
-        }
-        catch (Exception ex) { SessionLog.Write("SHELL_URL", ex); }
-    }
-
-    // ── Form close ───────────────────────────────────────────────────────────
 
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
@@ -317,93 +92,181 @@ public partial class MainForm : Form
         if (e.CloseReason == CloseReason.UserClosing)
         {
             e.Cancel = true;
-            Hide();
-            ShowInTaskbar = false;
-            _monitor.SetPollInterval(5000);
+            hideToTray();
             return;
         }
 
-        SaveWindowGeometry();
-        _trayIcon?.Dispose();
-        _monitor.Dispose();
+        if (WindowState == FormWindowState.Normal)
+        {
+            settings.windowWidth = Width;
+            settings.windowHeight = Height;
+        }
+        settings.windowState = WindowState == FormWindowState.Maximized ? "Maximized" : "Normal";
+        settingsManager.save(settings);
+
+        cts.Cancel();
+        cts.Dispose();
+        trayIcon.Dispose();
+        monitor.Dispose();
         base.OnFormClosing(e);
+    }
+
+    private NotifyIcon createTrayIcon()
+    {
+        var startupItem = new ToolStripMenuItem("Launch at startup") { Checked = startupManager.isEnabled, CheckOnClick = true };
+        startupItem.Click += (_, _) =>
+        {
+            try { startupManager.setEnabled(startupItem.Checked); }
+            catch (Exception ex)
+            {
+                startupItem.Checked = startupManager.isEnabled;
+                MessageBox.Show("Could not update startup: " + ex.Message, appInfo.name, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+        };
+
+        var menu = new ContextMenuStrip();
+        menu.Items.Add("Open CornWatch", null, (_, _) => showWindow());
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add(startupItem);
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add("Exit", null, (_, _) =>
+        {
+            trayIcon.Visible = false;
+            Application.Exit();
+        });
+
+        var icon = new NotifyIcon
+        {
+            Text = appInfo.name,
+            Icon = Icon ?? SystemIcons.Application,
+            Visible = true,
+            ContextMenuStrip = menu,
+        };
+        icon.DoubleClick += (_, _) => showWindow();
+        return icon;
+    }
+
+    private void showWindow()
+    {
+        ShowInTaskbar = true;
+        Show();
+        WindowState = FormWindowState.Normal;
+        Activate();
+        BringToFront();
+        monitor.setPollInterval(settings.pollIntervalMs);
+    }
+
+    private void hideToTray()
+    {
+        ShowInTaskbar = false;
+        Hide();
+        monitor.setPollInterval(5000);
+    }
+
+    private async Task checkForUpdateAsync()
+    {
+        var ct = cts.Token;
+        try
+        {
+            await Task.Delay(3000, ct); // let the dashboard render first
+            var info = await updateChecker.checkAsync(ct);
+            if (info?.isNewer != true) return;
+
+            // Non-blocking tray balloon; clicking it opens the releases page.
+            trayIcon.BalloonTipClicked += (_, _) => launch(info.releaseUrl ?? appInfo.releasesUrl);
+            trayIcon.ShowBalloonTip(6000, "CornWatch update available",
+                $"Version {info.latestTag ?? "?"} is available — click to download.", ToolTipIcon.Info);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { sessionLog.write("UPDATE_CHECK", ex); }
+    }
+
+    private async Task initWebViewAsync()
+    {
+        try
+        {
+            var view = new WebView2 { Dock = DockStyle.Fill };
+            Controls.Add(view);
+
+            try { await view.EnsureCoreWebView2Async(); }
+            catch (Exception ex)
+            {
+                sessionLog.write("WEBVIEW2_INIT", ex);
+                Controls.Remove(view);
+                view.Dispose();
+                Controls.Add(new Label
+                {
+                    Text = "⚠  WebView2 Runtime is not installed.\n\n" +
+                           "Download it from:\nhttps://developer.microsoft.com/en-us/microsoft-edge/webview2/\n\n" +
+                           "Restart CornWatch after installing.",
+                    Dock = DockStyle.Fill,
+                    TextAlign = ContentAlignment.MiddleCenter,
+                    ForeColor = Color.FromArgb(242, 176, 74),
+                    BackColor = Color.FromArgb(10, 10, 10),
+                    Font = new Font("Courier New", 10f),
+                });
+                return;
+            }
+
+            webView = view;
+            var core = view.CoreWebView2;
+            core.AddHostObjectToScript("cornBridge", new cornBridge(this, monitor));
+#if !DEBUG
+            core.Settings.AreDefaultContextMenusEnabled = false;
+            core.Settings.IsStatusBarEnabled = false;
+            core.Settings.AreDevToolsEnabled = false;
+#endif
+            core.NavigationCompleted += (_, _) => webViewReady = true;
+
+            var htmlPath = Path.Combine(AppContext.BaseDirectory, "UI", "Dashboard", "Dashboard.html");
+            core.Navigate(File.Exists(htmlPath) ? new Uri(htmlPath).AbsoluteUri : "about:blank");
+        }
+        catch (Exception ex) { sessionLog.write("WEBVIEW2_SETUP", ex); }
+    }
+
+    // Runs on the poll thread; posts to the UI thread without blocking it.
+    private void onSnapshotReady(systemSnapshot snap)
+    {
+        lastSnapshot = snap;
+        if (!webViewReady || IsDisposed) return;
+
+        var script = $"window.cornWatch?.onSnapshot({snapshotExporter.toJson(snap)})";
+        try { BeginInvoke(() => { _ = webView?.CoreWebView2?.ExecuteScriptAsync(script); }); }
+        catch (InvalidOperationException) { /* form handle gone — closing */ }
     }
 }
 
-// ── JS ↔ C# bridge ───────────────────────────────────────────────────────────
-
+// JS ↔ C# bridge, exposed to the dashboard as window.chrome.webview.hostObjects.cornBridge.
 [System.Runtime.InteropServices.ComVisible(true)]
-public class CornBridge(MainForm form, SystemMonitor monitor)
+public class cornBridge(mainForm form, systemMonitor monitor)
 {
-    public void OpenProcessManager()
-    {
-        try
-        {
-            var p = System.Diagnostics.Process.Start("taskmgr.exe");
-            if (p is null) SessionLog.Write("[BRIDGE] taskmgr.exe returned null handle");
-        }
-        catch (Exception ex) { SessionLog.Write("BRIDGE_TASKMGR", ex); }
-    }
+    public void openProcessManager() => mainForm.launch("taskmgr.exe");
 
-    public void OpenResourceMonitor()
-    {
-        try
-        {
-            var p = System.Diagnostics.Process.Start("resmon.exe");
-            if (p is null) SessionLog.Write("[BRIDGE] resmon.exe returned null handle");
-        }
-        catch (Exception ex) { SessionLog.Write("BRIDGE_RESMON", ex); }
-    }
+    public void openResourceMonitor() => mainForm.launch("resmon.exe");
 
-    public string GetGpuSensorDump() => monitor.GpuSensorDump;
+    public string getGpuSensorDump() => monitor.gpuSensorDump;
 
-    public bool   GetStartupEnabled() => StartupManager.IsEnabled;
-    public void   SetStartupEnabled(bool enabled)
-    {
-        if (enabled) StartupManager.Enable();
-        else         StartupManager.Disable();
-    }
+    public bool getStartupEnabled() => startupManager.isEnabled;
+
+    public void setStartupEnabled(bool enabled) => startupManager.setEnabled(enabled);
 
     /// <summary>Captures the dashboard as a PNG (fire-and-forget; runs on the UI thread).</summary>
-    public void ExportPng() => form.BeginInvoke((Action)form.ExportPngFromUi);
+    public void exportPng() => form.BeginInvoke((Action)form.exportPngFromUi);
 
     /// <summary>Exports the last snapshot to the Snapshots folder and returns the file path.</summary>
-    public string ExportSnapshot()
+    public string exportSnapshot()
     {
-        var snap = form.LastSnapshot;
-        if (snap is null) return "No snapshot available yet.";
+        if (form.lastSnapshot is not { } snap) return "No snapshot available yet.";
         try
         {
-            var path = SnapshotExporter.Export(snap);
-            MainForm.OpenInExplorer(path);
+            var path = snapshotExporter.export(snap);
+            mainForm.openInExplorer(path);
             return path;
         }
         catch (Exception ex)
         {
-            SessionLog.Write("BRIDGE_EXPORT", ex);
+            sessionLog.write("BRIDGE_EXPORT", ex);
             return "Export failed: " + ex.Message;
         }
-    }
-
-    // Expose current thresholds to the dashboard so it can render the
-    // configurable values instead of hardcoded JS constants.
-    public string GetSettings()
-    {
-        var s = SettingsManager.Current;
-        return System.Text.Json.JsonSerializer.Serialize(new
-        {
-            cpuWarnPercent     = s.CpuWarnPercent,
-            cpuCritPercent     = s.CpuCritPercent,
-            cpuWarnTempC       = s.CpuWarnTempC,
-            cpuCritTempC       = s.CpuCritTempC,
-            ramWarnPercent     = s.RamWarnPercent,
-            ramCritPercent     = s.RamCritPercent,
-            diskWarnPercent    = s.DiskWarnPercent,
-            diskCritPercent    = s.DiskCritPercent,
-            gpuWarnTempC       = s.GpuWarnTempC,
-            gpuCritTempC       = s.GpuCritTempC,
-            gpuVramWarnPercent = s.GpuVramWarnPercent,
-            gpuVramCritPercent = s.GpuVramCritPercent,
-        });
     }
 }

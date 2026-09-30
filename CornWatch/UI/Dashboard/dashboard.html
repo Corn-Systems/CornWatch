@@ -526,21 +526,21 @@ window.cornWatch = {
 
 async function exportSnapshot() {
   try {
-    const path = await window.chrome.webview.hostObjects.cornBridge.ExportSnapshot();
+    const path = await window.chrome.webview.hostObjects.cornBridge.exportSnapshot();
     alert('Saved to:\n' + path);
   } catch(e) { alert('Export unavailable: ' + e); }
 }
 
 async function exportPng() {
-  try { await window.chrome.webview.hostObjects.cornBridge.ExportPng(); }
+  try { await window.chrome.webview.hostObjects.cornBridge.exportPng(); }
   catch(e) { alert('PNG export unavailable: ' + e); }
 }
 
 async function toggleStartup() {
   try {
     const b = window.chrome.webview.hostObjects.cornBridge;
-    const current = await b.GetStartupEnabled();
-    await b.SetStartupEnabled(!current);
+    const current = await b.getStartupEnabled();
+    await b.setStartupEnabled(!current);
     updateStartupBtn(!current);
   } catch(e) { alert('Startup toggle unavailable: ' + e); }
 }
@@ -555,7 +555,7 @@ function updateStartupBtn(enabled) {
 
 async function initStartupBtn() {
   try {
-    const enabled = await window.chrome.webview.hostObjects.cornBridge.GetStartupEnabled();
+    const enabled = await window.chrome.webview.hostObjects.cornBridge.getStartupEnabled();
     updateStartupBtn(enabled);
   } catch(e) {}
 }
@@ -583,7 +583,7 @@ function updateProcessTable(procs) {
 
 async function showSensorDump() {
   try {
-    const dump = await window.chrome.webview.hostObjects.cornBridge.GetGpuSensorDump();
+    const dump = await window.chrome.webview.hostObjects.cornBridge.getGpuSensorDump();
     const w = window.open('', '_blank', 'width=700,height=500');
     // Safe: dump is plain diagnostic text from C# — escape it before writing.
     const pre = w.document.createElement('pre');
@@ -596,8 +596,8 @@ async function showSensorDump() {
 
 function bridge(action) {
   try {
-    if (action === 'taskmgr') window.chrome.webview.hostObjects.cornBridge.OpenProcessManager();
-    if (action === 'resmon')  window.chrome.webview.hostObjects.cornBridge.OpenResourceMonitor();
+    if (action === 'taskmgr') window.chrome.webview.hostObjects.cornBridge.openProcessManager();
+    if (action === 'resmon')  window.chrome.webview.hostObjects.cornBridge.openResourceMonitor();
   } catch(e) { console.warn('bridge unavailable', e); }
 }
 

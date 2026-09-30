@@ -3,58 +3,49 @@ using Microsoft.Win32;
 namespace CornWatch.Core;
 
 /// <summary>
-/// Manages Windows startup registration via the Run registry key.
-/// Uses HKCU (current user) so it does NOT require admin rights
-/// and appears in Task Manager → Startup tab.
-///
-/// Always writes the current exe path so a reinstall to a new location
-/// automatically heals a stale entry.
+/// Manages Windows startup registration via the HKCU Run registry key —
+/// no admin rights needed, and it appears in Task Manager → Startup.
+/// The value written is always the current exe path, so reinstalling to a new
+/// location heals any stale entry.
 /// </summary>
-public static class StartupManager
+public static class startupManager
 {
-    private const string RunKey  = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Run";
-    private const string AppName = "CornWatch";
+    private const string runKey = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Run";
 
-    // The value we write is always the current exe path so reinstalling to a
-    // new location heals any stale entry automatically.
-    private static string EntryValue =>
-        $"\"{AppContext.BaseDirectory}CornWatch.exe\" --minimized";
+    private static string entryValue => $"\"{AppContext.BaseDirectory}{appInfo.name}.exe\" --minimized";
 
-    public static bool IsEnabled
+    public static bool isEnabled
     {
         get
         {
             try
             {
-                using var key = Registry.CurrentUser.OpenSubKey(RunKey, false);
-                return key?.GetValue(AppName) is not null;
+                using var key = Registry.CurrentUser.OpenSubKey(runKey, false);
+                return key?.GetValue(appInfo.name) is not null;
             }
-            catch (Exception ex) { SessionLog.Write("STARTUP_READ", ex); return false; }
+            catch (Exception ex)
+            {
+                sessionLog.write("STARTUP_READ", ex);
+                return false;
+            }
         }
     }
 
-    public static void Enable()
+    /// <summary>Registers or removes the startup entry; logs and rethrows on failure.</summary>
+    public static void setEnabled(bool enabled)
     {
         try
         {
-            using var key = Registry.CurrentUser.OpenSubKey(RunKey, true)
+            using var key = Registry.CurrentUser.OpenSubKey(runKey, true)
                 ?? throw new InvalidOperationException("Could not open Run registry key.");
-            key.SetValue(AppName, EntryValue);
-            SessionLog.Write("[STARTUP] enabled: " + EntryValue);
+            if (enabled) key.SetValue(appInfo.name, entryValue);
+            else key.DeleteValue(appInfo.name, throwOnMissingValue: false);
+            sessionLog.write(enabled ? "[STARTUP] enabled: " + entryValue : "[STARTUP] disabled");
         }
-        catch (Exception ex) { SessionLog.Write("STARTUP_ENABLE", ex); throw; }
-    }
-
-    public static void Disable()
-    {
-        try
+        catch (Exception ex)
         {
-            using var key = Registry.CurrentUser.OpenSubKey(RunKey, true);
-            key?.DeleteValue(AppName, throwOnMissingValue: false);
-            SessionLog.Write("[STARTUP] disabled");
+            sessionLog.write("STARTUP_SET", ex);
+            throw;
         }
-        catch (Exception ex) { SessionLog.Write("STARTUP_DISABLE", ex); }
     }
-
-    public static void Toggle() { if (IsEnabled) Disable(); else Enable(); }
 }

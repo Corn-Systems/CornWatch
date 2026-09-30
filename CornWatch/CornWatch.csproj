@@ -55,7 +55,7 @@
     <Content Include="assets\cornwatch.png">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </Content>
-    <Content Include="UI\Dashboard\dashboard.html">
+    <Content Include="UI\Dashboard\Dashboard.html">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </Content>
   </ItemGroup>

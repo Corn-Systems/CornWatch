@@ -1,57 +1,47 @@
 using CornWatch.UI.Dashboard;
 
+// ⚠️ Namespaces and Main stay as-is: the generated ApplicationConfiguration lives in RootNamespace and the CLR requires "Main".
 namespace CornWatch;
 
-static class Program
+static class programEntry
 {
     // Global\ prefix makes the mutex cross-session so a startup-registered
     // hidden tray instance blocks a second foreground launch.
-    private const string MutexName = @"Global\CornSystems.CornWatch.SingleInstance";
+    private const string mutexName = @"Global\CornSystems.CornWatch.SingleInstance";
 
     [STAThread]
     static void Main(string[] args)
     {
-        // ── Single-instance guard ─────────────────────────────────────────────
-        using var mutex = new System.Threading.Mutex(true, MutexName, out bool isNew);
+        using var mutex = new Mutex(true, mutexName, out var isNew);
         if (!isNew)
         {
-            MessageBox.Show(
-                "CornWatch is already running.\nCheck the system tray.",
-                "CornWatch", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show("CornWatch is already running.\nCheck the system tray.",
+                appInfo.name, MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
 
-        // ── DPI (belt-and-suspenders; manifest also declares PerMonitorV2) ────
-        Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
-        ApplicationConfiguration.Initialize();
-
-        // ── Logging ───────────────────────────────────────────────────────────
-        AppPaths.EnsureDataDir();
-        SessionLog.SessionHeader();
-
-        // ── Unhandled exception safety net ────────────────────────────────────
-        Application.ThreadException += (_, e) =>
-            SessionLog.Write("UNHANDLED_THREAD", e.Exception);
-        AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+        try
         {
-            if (e.ExceptionObject is Exception ex)
-                SessionLog.Write("UNHANDLED_DOMAIN", ex);
-        };
+            ApplicationConfiguration.Initialize(); // DPI mode comes from ApplicationHighDpiMode in the .csproj
+            sessionLog.sessionHeader();
 
-        // ── Settings ──────────────────────────────────────────────────────────
-        var settings = SettingsManager.Current;
+            Application.ThreadException += (_, e) => sessionLog.write("UNHANDLED_THREAD", e.Exception);
+            AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+            {
+                if (e.ExceptionObject is Exception ex) sessionLog.write("UNHANDLED_DOMAIN", ex);
+            };
 
-        // --minimized on the command line overrides the stored preference for
-        // this session only (used by the startup registry entry).
-        bool startMinimized = settings.StartMinimized ||
-            args.Contains("--minimized", StringComparer.OrdinalIgnoreCase);
+            // --minimized overrides the stored preference for this session only (used by the startup registry entry).
+            var startMinimized = settingsManager.current.startMinimized
+                || args.Contains("--minimized", StringComparer.OrdinalIgnoreCase);
 
-        // ── History (warm up the singleton so first write is fast) ────────────
-        _ = HealthHistory.Instance;
-
-        Application.Run(new MainForm(startMinimized));
-
-        // ── Flush on clean exit ───────────────────────────────────────────────
-        HealthHistory.Instance.Flush();
+            _ = healthHistory.instance; // warm up the singleton so the first write is fast
+            Application.Run(new mainForm(startMinimized));
+        }
+        finally
+        {
+            healthHistory.instance.flush();
+            mutex.ReleaseMutex();
+        }
     }
 }
