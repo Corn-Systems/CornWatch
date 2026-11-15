@@ -24,7 +24,7 @@
 
     <!-- Single source of truth for the version.  AppInfo.cs reads it via
          AssemblyInformationalVersionAttribute; never hardcode elsewhere. -->
-    <Version>0.2.0</Version>
+    <Version>0.3.0</Version>
     <Company>Corn Systems</Company>
     <Authors>Corn Systems</Authors>
     <Product>CornWatch</Product>
@@ -44,6 +44,8 @@
     <PublishReadyToRun>false</PublishReadyToRun>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <DebugType>embedded</DebugType>
+    <!-- Keep NuGet packages' XML doc files out of the publish folder (and so out of the installer). -->
+    <PublishReferencesDocumentationFiles>false</PublishReferencesDocumentationFiles>
   </PropertyGroup>
 
   <ItemGroup>
@@ -61,10 +63,16 @@
   </ItemGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="CornWatch.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- WebView2 for the HTML dashboard panel -->
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4129.50" />
     <!-- WMI for hardware data (temps, drives) -->
     <PackageReference Include="System.Management" Version="10.0.11" />
+    <!-- Vendor GPU sensors (temperature / fan / power) and elevated CPU temperature. MPL-2.0. -->
+    <PackageReference Include="LibreHardwareMonitorLib" Version="0.9.6" />
     <!-- System.Text.Json ships in-box with net10.0 — no explicit package needed -->
   </ItemGroup>
 

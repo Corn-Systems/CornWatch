@@ -7,6 +7,7 @@
 ;   1. Publish (from CornWatch\CornWatch\):
 ;        dotnet publish -c Release
 ;      Output: bin\Release\net10.0-windows\win-x64\publish\CornWatch.exe
+;      (publish the project, not the .sln — the solution also contains the test project)
 ;   2. Compile:
 ;        ISCC.exe CornWatch.iss
 ;   3. Output: installer_output\CornWatch-Setup-<version>.exe
@@ -19,7 +20,9 @@
 #define MyAppURL       "https://github.com/Corn-Systems/CornWatch"
 #define MyAppExeName   "CornWatch.exe"
 #define PublishDir     "bin\Release\net10.0-windows\win-x64\publish"
-#define MyAppVersion   GetVersionNumbersString(PublishDir + "\" + MyAppExeName)
+#define FullVersion    GetVersionNumbersString(PublishDir + "\" + MyAppExeName)
+; Drop the fourth (always 0) part: 0.3.0.0 -> 0.3.0
+#define MyAppVersion   Copy(FullVersion, 1, RPos(".", FullVersion) - 1)
 
 [Setup]
 ; Fixed GUID — never change between releases; Windows uses it to detect upgrades/uninstall.
@@ -76,6 +79,10 @@ Source: "{#PublishDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
 #ifexist "..\LICENSE"
 Source: "..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
 #endif
+; Bundled only so [Code] can extract it to {tmp}; never copied to {app}.
+#ifexist "MicrosoftEdgeWebView2Setup.exe"
+Source: "MicrosoftEdgeWebView2Setup.exe"; Flags: dontcopy
+#endif
 
 [Icons]
 Name: "{group}\{#MyAppName}";           Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"
@@ -107,12 +114,14 @@ Filename: "{app}\{#MyAppExeName}"; \
   Description: "Launch {#MyAppName}"; \
   Flags: nowait postinstall skipifsilent
 
+#ifexist "MicrosoftEdgeWebView2Setup.exe"
 [Code]
 // Extract the bootstrapper to {tmp} so it can run elevated from there.
 procedure ExtractBootstrapper();
 begin
   ExtractTemporaryFile('MicrosoftEdgeWebView2Setup.exe');
 end;
+#endif
 
 [UninstallDelete]
 ; Leave %AppData%\CornSystems\CornWatch alone (settings, logs, history —

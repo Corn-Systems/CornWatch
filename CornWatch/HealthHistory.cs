@@ -2,76 +2,114 @@ using System.Text.Json;
 
 namespace CornWatch;
 
-// Persists a rolling 24-hour ring of health-score + alert-count snapshots.
-// Loaded at startup, appended every poll tick, written once per minute so disk I/O stays negligible.
-internal sealed class healthHistory
+// Persists a rolling 24-hour history of the health score, one entry per minute
+// (average score, peak alert count). Samples arrive every poll tick; a minute is
+// written to disk when it completes, so disk I/O stays negligible at any poll rate.
+internal sealed class HealthHistory
 {
-    public sealed class historyEntry
+    public sealed class HistoryEntry
     {
-        public DateTime timestamp { get; set; }
-        public int score { get; set; }
-        public int alertCount { get; set; }
+        public DateTime Timestamp { get; set; }
+        public int Score { get; set; }
+        public int AlertCount { get; set; }
     }
 
-    private const int maxEntries = 1440;   // 24 h at 1 s polling
-    private const int flushEvery = 60;
+    private static readonly TimeSpan _window = TimeSpan.FromHours(24);
 
-    // ⚠️ On-disk keys are now camelCase; case-insensitive read keeps existing PascalCase files loading.
-    private static readonly JsonSerializerOptions json = new()
+    // On-disk keys are camelCase; case-insensitive read keeps older PascalCase files loading.
+    private static readonly JsonSerializerOptions _json = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         PropertyNameCaseInsensitive = true,
     };
 
-    private static readonly Lazy<healthHistory> lazy = new(() =>
+    private static readonly Lazy<HealthHistory> _lazy = new(() =>
     {
-        var history = new healthHistory();
-        history.load();
+        var history = new HealthHistory();
+        history.Load();
         return history;
     });
 
-    private readonly List<historyEntry> ring = new(maxEntries + 1);
-    private int unflushed;
+    private readonly List<HistoryEntry> _ring = [];
+    private DateTime _bucketMinute;
+    private int _bucketScoreSum, _bucketSamples, _bucketMaxAlerts;
 
-    private healthHistory() { }
+    private HealthHistory() { }
 
-    public static healthHistory instance => lazy.Value;
+    public static HealthHistory Instance => _lazy.Value;
 
-    /// <summary>Append one poll result. Flushes to disk every flushEvery calls.</summary>
-    public void append(int score, int alertCount)
+    public void Append(int score, int alertCount)
     {
-        lock (ring)
+        var now = DateTime.Now;
+        var minute = new DateTime(now.Year, now.Month, now.Day, now.Hour, now.Minute, 0, now.Kind);
+        lock (_ring)
         {
-            ring.Add(new historyEntry { timestamp = DateTime.Now, score = score, alertCount = alertCount });
-            if (ring.Count > maxEntries) ring.RemoveAt(0);
-            if (++unflushed < flushEvery) return;
-            unflushed = 0;
-            save();
+            if (_bucketSamples > 0 && minute != _bucketMinute)
+            {
+                CloseBucket();
+                Save();
+            }
+            _bucketMinute = minute;
+            _bucketScoreSum += score;
+            _bucketSamples++;
+            _bucketMaxAlerts = Math.Max(_bucketMaxAlerts, alertCount);
         }
     }
 
-    /// <summary>Force an immediate flush (call on app exit).</summary>
-    public void flush()
+    // Completed minutes plus the one in progress, oldest first.
+    public string ToJson()
     {
-        lock (ring) save();
+        lock (_ring)
+            return JsonSerializer.Serialize(_bucketSamples > 0 ? [.. _ring, CurrentBucket()] : _ring, _json);
     }
 
-    private void load()
+    // Writes everything including the in-progress minute (call on app exit).
+    public void Flush()
+    {
+        lock (_ring)
+        {
+            if (_bucketSamples > 0) CloseBucket();
+            Save();
+        }
+    }
+
+    private HistoryEntry CurrentBucket() => new()
+    {
+        Timestamp = _bucketMinute,
+        Score = (int)Math.Round((double)_bucketScoreSum / _bucketSamples),
+        AlertCount = _bucketMaxAlerts,
+    };
+
+    private void CloseBucket()
+    {
+        _ring.Add(CurrentBucket());
+        _bucketScoreSum = _bucketSamples = _bucketMaxAlerts = 0;
+        Trim();
+    }
+
+    private void Trim()
+    {
+        var cutoff = DateTime.Now - _window;
+        _ring.RemoveAll(e => e.Timestamp < cutoff);
+    }
+
+    private void Load()
     {
         try
         {
-            if (!File.Exists(appPaths.historyFile)) return;
-            var entries = JsonSerializer.Deserialize<List<historyEntry>>(File.ReadAllText(appPaths.historyFile), json);
+            if (!File.Exists(AppPaths.HistoryFile)) return;
+            var entries = JsonSerializer.Deserialize<List<HistoryEntry>>(File.ReadAllText(AppPaths.HistoryFile), _json);
             if (entries is null) return;
-            ring.AddRange(entries.TakeLast(maxEntries));
-            sessionLog.write($"[HISTORY] loaded {ring.Count} entries");
+            _ring.AddRange(entries.OrderBy(e => e.Timestamp));
+            Trim();
+            SessionLog.Write($"[HISTORY] loaded {_ring.Count} entries");
         }
-        catch (Exception ex) { sessionLog.write("HISTORY", ex); }
+        catch (Exception ex) { SessionLog.Write("HISTORY", ex); }
     }
 
-    private void save()
+    private void Save()
     {
-        try { appPaths.writeAtomic(appPaths.historyFile, JsonSerializer.Serialize(ring, json)); }
-        catch (Exception ex) { sessionLog.write("HISTORY", ex); }
+        try { AppPaths.WriteAtomic(AppPaths.HistoryFile, JsonSerializer.Serialize(_ring, _json)); }
+        catch (Exception ex) { SessionLog.Write("HISTORY", ex); }
     }
 }

@@ -5,11 +5,13 @@
 <title>CornWatch</title>
 <style>
   :root {
-    --bg:#0a0a0a; --bg2:#111111; --bg3:#1a1a1a;
-    --border:rgba(255,255,255,0.07);
-    --green:#6fcf6f; --amber:#f2b04a; --red:#e05454; --blue:#5ab4e8;
-    --text:#e0e0d8; --muted:#666660;
-    --radius:10px; --font:'Courier New','Consolas',monospace;
+    /* Corn Systems palette — keep in sync with Theme.cs and the JS COLORS table below. */
+    --bg:#080812; --bg2:#13122a; --bg3:#1a1835;
+    --border:#2a2850; --border2:#3d3a70;
+    --accent:#f5c842; --accent-hover:#ffd75a; --sky:#7c3aed;
+    --green:#22c55e; --amber:#fbbf24; --red:#ef4444;
+    --text:#f0eefc; --dim:#a09dc0; --muted:#6a679b;
+    --font:'Courier New','Consolas',monospace;
   }
   * { box-sizing:border-box; margin:0; padding:0; }
   html,body { width:100%; height:100%; background:var(--bg); color:var(--text); font-family:var(--font); overflow:hidden; }
@@ -18,10 +20,10 @@
 
   header {
     display:flex; align-items:center; gap:14px; padding:0 20px;
-    background:var(--bg2); border-bottom:1px solid var(--border);
+    background:var(--bg2); border-bottom:1px solid var(--border); border-left:3px solid var(--accent);
   }
   .logo { font-size:20px; }
-  .app-title { font-size:13px; letter-spacing:.12em; color:var(--green); text-transform:uppercase; }
+  .app-title { font-size:13px; letter-spacing:.12em; color:var(--accent); font-weight:bold; text-transform:uppercase; }
   .header-right { margin-left:auto; display:flex; align-items:center; gap:16px; font-size:11px; color:var(--muted); }
   #health-badge {
     display:flex; align-items:center; gap:6px; padding:4px 10px;
@@ -56,20 +58,18 @@
   .ring-fg { fill:none; stroke-linecap:round; transition:stroke-dashoffset .6s ease, stroke .4s; }
 
   /* ── CPU heatmap ── */
-  #cpu-heatmap { display:grid; grid-template-columns:repeat(auto-fill,minmax(32px,1fr)); gap:4px; flex:1; align-content:start; }
-  .core-cell { aspect-ratio:1; border-radius:4px; display:flex; align-items:center; justify-content:center; font-size:9px; color:rgba(255,255,255,.5); transition:background .4s; }
-
-  /* ── Network ── */
-  #net-canvas { width:100%; flex:1; }
+  #cpu-heatmap { display:grid; grid-template-columns:repeat(4,1fr); gap:4px; align-content:start; }
+  #cpu-heatmap.dense { grid-template-columns:repeat(6,1fr); gap:3px; }
+  .scroll-col { overflow-y:auto; scrollbar-width:thin; scrollbar-color:var(--bg3) transparent; }
+  .core-cell { aspect-ratio:1; border-radius:4px; display:flex; align-items:center; justify-content:center; font-size:9px; color:var(--dim); transition:background .4s; }
 
   /* ── Disk bars ── */
   .disk-row { display:flex; flex-direction:column; gap:3px; }
-  .disk-header { display:flex; justify-content:space-between; font-size:11px; }
+  .disk-header { display:flex; justify-content:space-between; gap:8px; font-size:11px; }
   .disk-bar-wrap { height:6px; background:var(--bg3); border-radius:3px; overflow:hidden; }
   .disk-bar { height:100%; border-radius:3px; transition:width .6s ease, background .4s; }
 
   /* ── GPU card ── */
-  #gpu-card { }
   .gpu-stat-row { display:flex; justify-content:space-between; align-items:center; font-size:11px; }
   .gpu-stat-label { color:var(--muted); font-size:10px; letter-spacing:.06em; }
   .gpu-stat-val { font-weight:bold; transition:color .4s; }
@@ -78,21 +78,23 @@
   .gpu-name { font-size:10px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 
   .ctrl-btn {
-    flex:1; background:var(--bg3); border:1px solid rgba(255,255,255,0.15);
-    color:var(--text); padding:9px 8px; border-radius:8px; cursor:pointer;
+    flex:1; background:var(--bg3); border:1px solid var(--border2);
+    color:var(--dim); padding:9px 8px; border-radius:8px; cursor:pointer;
     font-size:11px; font-family:inherit; letter-spacing:.05em;
     transition:background .2s;
   }
-  .ctrl-btn:hover { background:#2a2a2a; }
+  .ctrl-btn:hover { background:var(--border); color:var(--text); }
+  .ctrl-btn.primary { background:var(--accent); border-color:var(--accent); color:var(--bg); font-weight:bold; }
+  .ctrl-btn.primary:hover { background:var(--accent-hover); color:var(--bg); }
 
   /* ── Alerts ── */
   #alerts-card { grid-column:4; grid-row:1/3; }
   .alert-list { display:flex; flex-direction:column; gap:6px; flex:1; overflow-y:auto; }
   .alert-item { padding:8px 10px; border-radius:6px; border-left:3px solid var(--green); background:var(--bg3); font-size:11px; line-height:1.5; }
   .alert-item.warning { border-color:var(--amber); }
-  .alert-item.critical { border-color:var(--red); background:rgba(224,84,84,.08); }
+  .alert-item.critical { border-color:var(--red); background:rgba(239,68,68,.10); }
   .alert-cat { font-size:9px; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); }
-  .no-alerts { font-size:12px; color:var(--green); opacity:.6; text-align:center; margin-top:20px; }
+  .no-alerts { font-size:12px; color:var(--green); opacity:.8; text-align:center; margin-top:20px; }
 
   /* ── Sparkline ── */
   .sparkline { width:100%; height:28px; }
@@ -104,6 +106,30 @@
   .proc-table th { color:var(--muted); text-align:left; padding:0 8px 4px 0; font-weight:normal; font-size:10px; letter-spacing:.1em; text-transform:uppercase; }
   .proc-table td { padding:3px 8px 3px 0; border-top:1px solid var(--border); }
   .proc-bar { display:inline-block; height:4px; border-radius:2px; background:var(--green); vertical-align:middle; transition:width .4s; }
+
+  /* ── 24h health history ── */
+  #history-wrap { border-top:1px solid var(--border); padding-top:8px; display:flex; flex-direction:column; gap:4px; }
+  #history-svg { width:100%; height:44px; }
+  #history-caption { font-size:10px; color:var(--muted); }
+
+  /* ── Settings dialog ── */
+  #settings-overlay { position:fixed; inset:0; background:rgba(8,8,18,.75); display:none; align-items:center; justify-content:center; z-index:10; }
+  #settings-overlay.open { display:flex; }
+  #settings-panel { background:var(--bg2); border:1px solid var(--border2); border-radius:10px; padding:20px 22px; width:440px; max-height:90vh; overflow-y:auto; display:flex; flex-direction:column; gap:12px; }
+  #settings-panel h2 { font-size:13px; letter-spacing:.12em; text-transform:uppercase; color:var(--accent); }
+  .set-group { font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--muted); margin-top:4px; }
+  .set-row { display:grid; grid-template-columns:1fr 78px 78px; gap:8px; align-items:center; font-size:11px; }
+  .set-row.single { grid-template-columns:1fr 164px; }
+  .set-row input[type=number] { width:100%; background:var(--bg); border:1px solid var(--border2); border-radius:6px; color:var(--text); font-family:inherit; font-size:11px; padding:5px 6px; }
+  .set-row input[type=checkbox] { justify-self:end; width:15px; height:15px; accent-color:var(--accent); }
+  .set-head { color:var(--muted); font-size:9px; letter-spacing:.1em; text-transform:uppercase; }
+  #settings-error { color:var(--red); font-size:11px; min-height:14px; }
+
+  /* ── GPU selector (only shown with more than one GPU) ── */
+  #gpu-tabs { display:none; gap:4px; }
+  #gpu-tabs.multi { display:flex; }
+  .gpu-tab { flex:1; min-width:0; background:var(--bg3); border:1px solid var(--border); color:var(--muted); border-radius:6px; padding:4px 6px; font-family:inherit; font-size:10px; cursor:pointer; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .gpu-tab.active { border-color:var(--accent); color:var(--accent); }
 </style>
 </head>
 <body>
@@ -114,6 +140,7 @@
     <span class="app-title">CornWatch</span>
     <span style="font-size:11px;color:var(--muted)" id="cpu-name">—</span>
     <div class="header-right">
+      <span id="app-version"></span>
       <span id="uptime" title="System uptime"></span>
       <span id="timestamp">—</span>
       <div id="health-badge"><span class="dot"></span><span id="health-val">—</span></div>
@@ -129,7 +156,7 @@
         <svg class="gauge-svg" viewBox="0 0 100 100">
           <circle class="ring-bg" cx="50" cy="50" r="38" stroke-width="7"/>
           <circle id="cpu-ring" class="ring-fg" cx="50" cy="50" r="38" stroke-width="7"
-            stroke="#6fcf6f" stroke-dasharray="238.76" stroke-dashoffset="238.76"
+            stroke="#22c55e" stroke-dasharray="238.76" stroke-dashoffset="238.76"
             transform="rotate(-90 50 50)"/>
         </svg>
         <div class="gauge-center">
@@ -148,7 +175,7 @@
         <svg class="gauge-svg" viewBox="0 0 100 100">
           <circle class="ring-bg" cx="50" cy="50" r="38" stroke-width="7"/>
           <circle id="ram-ring" class="ring-fg" cx="50" cy="50" r="38" stroke-width="7"
-            stroke="#6fcf6f" stroke-dasharray="238.76" stroke-dashoffset="238.76"
+            stroke="#22c55e" stroke-dasharray="238.76" stroke-dashoffset="238.76"
             transform="rotate(-90 50 50)"/>
         </svg>
         <div class="gauge-center">
@@ -163,13 +190,14 @@
     <!-- GPU -->
     <div class="card" id="gpu-card">
       <span class="card-label">GPU</span>
+      <div id="gpu-tabs"></div>
       <div class="gpu-name" id="gpu-name">Detecting...</div>
 
       <div class="gauge-wrap" style="flex:unset;height:80px">
         <svg class="gauge-svg" viewBox="0 0 100 100" style="max-width:80px">
           <circle class="ring-bg" cx="50" cy="50" r="38" stroke-width="7"/>
           <circle id="gpu-ring" class="ring-fg" cx="50" cy="50" r="38" stroke-width="7"
-            stroke="#5ab4e8" stroke-dasharray="238.76" stroke-dashoffset="238.76"
+            stroke="#7c3aed" stroke-dasharray="238.76" stroke-dashoffset="238.76"
             transform="rotate(-90 50 50)"/>
         </svg>
         <div class="gauge-center" style="position:relative;margin-left:8px;text-align:left">
@@ -191,7 +219,7 @@
             <span class="gpu-stat-val" id="gpu-vram">—</span>
           </div>
           <div class="gpu-bar-wrap">
-            <div class="gpu-bar" id="gpu-vram-bar" style="width:0%;background:var(--blue)"></div>
+            <div class="gpu-bar" id="gpu-vram-bar" style="width:0%;background:var(--sky)"></div>
           </div>
         </div>
 
@@ -209,10 +237,6 @@
           <span class="gpu-stat-label">POWER</span>
           <span class="gpu-stat-val" id="gpu-power">—</span>
         </div>
-
-        <!-- D3D engine breakdown for AMD -->
-        <div id="gpu-d3d-engines" style="display:flex;flex-direction:column;gap:3px;border-top:1px solid var(--border);padding-top:6px;margin-top:2px"></div>
-
       </div>
     </div>
 
@@ -222,19 +246,25 @@
       <div class="alert-list" id="alert-list">
         <div class="no-alerts">All systems nominal</div>
       </div>
-      <div style="margin-top:auto;display:flex;flex-direction:column;gap:6px">
+      <div id="history-wrap">
+        <span class="card-label">Health · last 24h</span>
+        <svg id="history-svg" viewBox="0 0 240 44" preserveAspectRatio="none"></svg>
+        <div id="history-caption">Collecting data…</div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:6px">
         <div style="display:flex;gap:6px">
-          <button onclick="bridge('taskmgr')" class="ctrl-btn">Task Manager</button>
-          <button onclick="bridge('resmon')"  class="ctrl-btn">Res Monitor</button>
+          <button onclick="host().OpenProcessManager()"  class="ctrl-btn">Task Manager</button>
+          <button onclick="host().OpenResourceMonitor()" class="ctrl-btn">Res Monitor</button>
         </div>
         <div style="display:flex;gap:6px">
-          <button onclick="exportSnapshot()" class="ctrl-btn" style="color:var(--green)">Export JSON</button>
-          <button onclick="exportPng()"      class="ctrl-btn" style="color:var(--blue)">Export PNG</button>
+          <button onclick="exportSnapshot()" class="ctrl-btn">Export JSON</button>
+          <button onclick="exportPng()"      class="ctrl-btn">Export PNG</button>
         </div>
         <div style="display:flex;gap:6px">
-          <button onclick="toggleStartup()"  class="ctrl-btn" id="startup-btn">Startup: ...</button>
-          <button onclick="showSensorDump()" class="ctrl-btn" style="color:var(--amber);font-size:10px">GPU Debug</button>
+          <button onclick="toggleStartup()" class="ctrl-btn" id="startup-btn">Startup: ...</button>
+          <button onclick="openSettings()"  class="ctrl-btn" style="color:var(--accent)">Settings</button>
         </div>
+        <button onclick="showSensorDump()" class="ctrl-btn" style="font-size:10px;padding:5px 8px">GPU / Sensor Debug</button>
       </div>
     </div>
 
@@ -242,20 +272,20 @@
     <div class="card" id="proc-card" style="gap:8px">
       <div style="display:flex;gap:24px;flex:1;overflow:hidden">
 
-        <div style="min-width:120px">
+        <div class="scroll-col" style="width:170px;flex-shrink:0">
           <span class="card-label">CPU Cores</span>
           <div id="cpu-heatmap" style="margin-top:8px"></div>
         </div>
 
         <div style="flex:1;overflow:hidden">
           <span class="card-label">Network</span>
-          <div style="font-size:9px;color:var(--muted);margin:4px 0">▲ <span id="net-up">0</span> Mbps &nbsp; ▼ <span id="net-down">0</span> Mbps</div>
+          <div style="font-size:9px;color:var(--muted);margin:4px 0"><span style="color:var(--sky)">▲</span> <span id="net-up">0</span> Mbps &nbsp; <span style="color:var(--accent)">▼</span> <span id="net-down">0</span> Mbps</div>
           <canvas id="net-canvas" height="60" style="width:100%"></canvas>
           <div class="card-sub" id="net-adapter" style="margin-top:4px">—</div>
         </div>
 
-        <div style="min-width:160px">
-          <span class="card-label">Disk I/O & Space</span>
+        <div class="scroll-col" style="min-width:190px;padding-right:4px">
+          <span class="card-label">Disk I/O &amp; Space</span>
           <div style="font-size:11px;color:var(--muted);margin-top:6px">
             R: <span id="disk-read">0</span> MB/s &nbsp; W: <span id="disk-write">0</span> MB/s
           </div>
@@ -286,6 +316,18 @@
   </div>
 </div>
 
+<div id="settings-overlay" onclick="if (event.target === this) closeSettings()">
+  <div id="settings-panel">
+    <h2>Settings</h2>
+    <div id="settings-fields"></div>
+    <div id="settings-error"></div>
+    <div style="display:flex;gap:6px">
+      <button onclick="saveSettings()"  class="ctrl-btn primary">Save</button>
+      <button onclick="closeSettings()" class="ctrl-btn">Cancel</button>
+    </div>
+  </div>
+</div>
+
 <script>
 'use strict';
 
@@ -308,20 +350,21 @@ function esc(str) {
 }
 
 // ── Colour helpers ───────────────────────────────────────────────────────────
+const COLORS = { green:'#22c55e', amber:'#fbbf24', red:'#ef4444', accent:'#f5c842', sky:'#7c3aed', bg:'#080812' };
 function pctColor(v) {
-  if (v > 85) return '#e05454';
-  if (v > 65) return '#f2b04a';
-  return '#6fcf6f';
+  if (v > 85) return COLORS.red;
+  if (v > 65) return COLORS.amber;
+  return COLORS.green;
 }
 function tempColor(v) {
-  if (v > 90) return '#e05454';
-  if (v > 75) return '#f2b04a';
-  return '#6fcf6f';
+  if (v > 90) return COLORS.red;
+  if (v > 75) return COLORS.amber;
+  return COLORS.green;
 }
+// Idle cores stay dark; load fades in as corn gold, and a pegged core turns red.
 function coreColor(v) {
-  const r = v > 80 ? 224 : v > 50 ? 200 : 60;
-  const g = v > 80 ? 84  : v > 50 ? 150 : 207;
-  return `rgb(${r},${g},80)`;
+  if (v > 85) return COLORS.red;
+  return `rgba(245,200,66,${(0.08 + Math.max(0, Math.min(100, v)) / 100 * 0.85).toFixed(2)})`;
 }
 
 // Accepts "critical" / "Critical" / 2 — never throws on either shape.
@@ -365,7 +408,56 @@ function drawNetChart() {
     netCtx.strokeStyle = color; netCtx.lineWidth = 1.5; netCtx.stroke();
   }
   netCtx.clearRect(0,0,W,H);
-  line(netDown,'#6fcf6f'); line(netUp,'#f2b04a');
+  line(netDown, COLORS.accent); line(netUp, COLORS.sky);
+}
+
+// ── GPU card ─────────────────────────────────────────────────────────────────
+// With several GPUs the card shows one at a time; the choice is remembered.
+let lastGpus = [];
+let selectedGpu = 0;
+try { selectedGpu = Number(localStorage.getItem('selectedGpu')) || 0; } catch(e) {}
+
+function selectGpu(i) {
+  selectedGpu = i;
+  try { localStorage.setItem('selectedGpu', i); } catch(e) {}
+  renderGpu();
+}
+
+function renderGpu() {
+  const set = (id, text) => { document.getElementById(id).textContent = text; };
+  const tabs = document.getElementById('gpu-tabs');
+  if (selectedGpu >= lastGpus.length) selectedGpu = 0;
+  tabs.classList.toggle('multi', lastGpus.length > 1);
+  const tabKey = lastGpus.map(g => g.name).join('|') + '#' + selectedGpu;
+  if (tabs.dataset.key !== tabKey) {
+    tabs.dataset.key = tabKey;
+    tabs.innerHTML = lastGpus.map((g, i) =>
+      `<button class="gpu-tab${i === selectedGpu ? ' active' : ''}" onclick="selectGpu(${i})" title="${esc(g.name)}">${esc(g.name)}</button>`).join('');
+  }
+
+  const gpu = lastGpus[selectedGpu];
+  if (!gpu) { set('gpu-name', 'No GPU detected'); return; }
+
+  set('gpu-name', gpu.name || 'Unknown GPU');
+  const gpuPct = Math.round(gpu.usagePercent);
+  set('gpu-pct', gpuPct + '%');
+  document.getElementById('gpu-pct').style.color = COLORS.sky;
+  setRing('gpu-ring', gpuPct, COLORS.sky);
+
+  // Sensors are null when the vendor API doesn't expose them — show N/A rather than zero.
+  const tempEl = document.getElementById('gpu-temp');
+  const temp = gpu.temperatureCelsius;
+  tempEl.textContent = temp == null ? 'N/A' : `${temp.toFixed(0)}°C`;
+  tempEl.style.color = temp == null ? 'var(--muted)' : tempColor(temp);
+  set('gpu-fan',   gpu.fanRpm == null ? 'N/A' : gpu.fanRpm > 0 ? `${Math.round(gpu.fanRpm)} RPM` : '0 RPM (idle)');
+  set('gpu-power', gpu.powerWatts == null ? 'N/A' : `${gpu.powerWatts.toFixed(0)} W`);
+  set('gpu-compute', gpu.computeUsagePercent > 0 ? `${gpu.computeUsagePercent.toFixed(1)}%` : '—');
+
+  const vramPct = Math.round(gpu.vramUsagePercent);
+  set('gpu-vram', gpu.vramTotalMb > 0 ? `${(gpu.vramUsedMb/1024).toFixed(1)} / ${(gpu.vramTotalMb/1024).toFixed(1)} GB` : '—');
+  const bar = document.getElementById('gpu-vram-bar');
+  bar.style.width = vramPct + '%';
+  bar.style.background = vramPct > 65 ? pctColor(vramPct) : COLORS.sky;
 }
 
 // ── Main snapshot handler ────────────────────────────────────────────────────
@@ -390,7 +482,7 @@ window.cornWatch = {
     cpuHist.push(cpuPct); cpuHist.shift();
     renderSparkline('cpu-spark', cpuHist, pctColor(cpuPct));
 
-    // CPU temp — show "N/A (run as admin)" when CpuTempAvailable is false.
+    // CPU temp — the ACPI thermal zone is only readable when elevated.
     const tempEl = document.getElementById('cpu-temp');
     if (!snap.cpuTempAvailable) {
       tempEl.textContent = 'Temp: N/A — run as admin';
@@ -411,59 +503,8 @@ window.cornWatch = {
       `${(snap.ramUsedBytes/1073741824).toFixed(1)} / ${(snap.ramTotalBytes/1073741824).toFixed(1)} GB`;
 
     // GPU
-    const gpu = snap.gpus?.[0];
-    if (gpu) {
-      document.getElementById('gpu-name').textContent    = gpu.name || 'Unknown GPU';
-      const gpuPct = Math.round(gpu.usagePercent);
-      document.getElementById('gpu-pct').textContent     = gpuPct + '%';
-      document.getElementById('gpu-pct').style.color     = '#5ab4e8';
-      setRing('gpu-ring', gpuPct, '#5ab4e8');
-
-      // GPU temp — show N/A when vendor SDK not integrated (temp === 0 and fan === 0 and power === 0)
-      const gpuTempEl = document.getElementById('gpu-temp');
-      const hasGpuThermal = gpu.temperatureCelsius > 0 || gpu.fanRpm > 0 || gpu.powerWatts > 0;
-      if (!hasGpuThermal) {
-        gpuTempEl.textContent = 'N/A';
-        gpuTempEl.style.color = 'var(--muted)';
-        gpuTempEl.title       = 'GPU thermal data requires vendor SDK (AMD ADLX / NVIDIA NVML)';
-      } else {
-        const tc = tempColor(gpu.temperatureCelsius);
-        gpuTempEl.textContent = gpu.temperatureCelsius > 0 ? `${gpu.temperatureCelsius.toFixed(0)}°C` : '—';
-        gpuTempEl.style.color = tc;
-        gpuTempEl.title       = '';
-      }
-
-      const vramPct = Math.round(gpu.vramUsagePercent);
-      document.getElementById('gpu-vram').textContent = gpu.vramTotalMb > 0
-        ? `${(gpu.vramUsedMb/1024).toFixed(1)} / ${(gpu.vramTotalMb/1024).toFixed(1)} GB`
-        : '—';
-      document.getElementById('gpu-vram-bar').style.width      = vramPct + '%';
-      document.getElementById('gpu-vram-bar').style.background = pctColor(vramPct);
-
-      document.getElementById('gpu-fan').textContent     = gpu.fanRpm    > 0 ? `${Math.round(gpu.fanRpm)} RPM`    : 'N/A';
-      document.getElementById('gpu-compute').textContent = gpu.computeUsagePercent > 0 ? `${gpu.computeUsagePercent.toFixed(1)}%` : '—';
-      document.getElementById('gpu-power').textContent   = gpu.powerWatts > 0 ? `${gpu.powerWatts.toFixed(0)} W` : 'N/A';
-
-      // D3D engine breakdown (AMD-specific)
-      const engines    = gpu.d3DEngines || {};
-      const engineKeys = Object.keys(engines).filter(k => engines[k] > 0);
-      const d3dEl = document.getElementById('gpu-d3d-engines');
-      if (d3dEl) {
-        if (engineKeys.length > 0) {
-          // Safe: engineKeys come from a known key set; engine values are numbers.
-          d3dEl.innerHTML = engineKeys.map(k =>
-            `<div class="gpu-stat-row">
-              <span class="gpu-stat-label" style="font-size:9px">${esc(k.replace('D3D ',''))}</span>
-              <span class="gpu-stat-val" style="font-size:11px;color:var(--blue)">${engines[k].toFixed(1)}%</span>
-            </div>`
-          ).join('');
-        } else {
-          d3dEl.innerHTML = '';
-        }
-      }
-    } else {
-      document.getElementById('gpu-name').textContent = 'No GPU detected';
-    }
+    lastGpus = snap.gpus || [];
+    renderGpu();
 
     // Net
     document.getElementById('net-up').textContent      = snap.networkSentMbps.toFixed(2);
@@ -485,13 +526,12 @@ window.cornWatch = {
       return `
         <div class="disk-row">
           <div class="disk-header">
-            <span>${esc(d.driveLetter)} ${esc(d.label || '')}</span>
-            <span style="color:${pctColor(pct)}">${pct}%</span>
+            <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(d.driveLetter)} ${esc(d.label || '')}</span>
+            <span style="white-space:nowrap"><span style="font-size:9px;color:var(--muted)">${freeGb} GB free</span> <span style="color:${pctColor(pct)}">${pct}%</span></span>
           </div>
           <div class="disk-bar-wrap">
             <div class="disk-bar" style="width:${pct}%;background:${pctColor(pct)}"></div>
           </div>
-          <div style="font-size:9px;color:#555">${freeGb} GB free</div>
         </div>`;
     }).join('');
 
@@ -499,6 +539,7 @@ window.cornWatch = {
     const heatmap = document.getElementById('cpu-heatmap');
     const cores = snap.cpuCoreUsages || [];
     if (heatmap.children.length !== cores.length) {
+      heatmap.classList.toggle('dense', cores.length > 16);
       // Core indices are numbers — safe to use directly.
       heatmap.innerHTML = cores.map((_,i) =>
         `<div class="core-cell" id="core-${i}">${i}</div>`).join('');
@@ -524,41 +565,132 @@ window.cornWatch = {
   }
 };
 
+// ── C# bridge ────────────────────────────────────────────────────────────────
+// Method names match the C# CornBridge class. Throws when the page is opened outside
+// CornWatch; callers catch and report.
+function host() { return window.chrome.webview.hostObjects.cornBridge; }
+
 async function exportSnapshot() {
-  try {
-    const path = await window.chrome.webview.hostObjects.cornBridge.exportSnapshot();
-    alert('Saved to:\n' + path);
-  } catch(e) { alert('Export unavailable: ' + e); }
+  try { alert(await host().ExportSnapshot()); }
+  catch(e) { alert('Export unavailable: ' + e); }
 }
 
 async function exportPng() {
-  try { await window.chrome.webview.hostObjects.cornBridge.exportPng(); }
+  try { await host().ExportPng(); }
   catch(e) { alert('PNG export unavailable: ' + e); }
 }
 
 async function toggleStartup() {
   try {
-    const b = window.chrome.webview.hostObjects.cornBridge;
-    const current = await b.getStartupEnabled();
-    await b.setStartupEnabled(!current);
-    updateStartupBtn(!current);
-  } catch(e) { alert('Startup toggle unavailable: ' + e); }
+    await host().SetStartupEnabled(!(await host().GetStartupEnabled()));
+    await refreshStartupBtn();
+  } catch(e) { alert('Could not change startup: ' + e); }
 }
 
-function updateStartupBtn(enabled) {
-  const btn = document.getElementById('startup-btn');
-  if (btn) {
+async function refreshStartupBtn() {
+  try {
+    const enabled = await host().GetStartupEnabled();
+    const btn = document.getElementById('startup-btn');
     btn.textContent = 'Startup: ' + (enabled ? 'ON' : 'OFF');
     btn.style.color = enabled ? 'var(--green)' : 'var(--muted)';
-  }
+  } catch(e) { console.warn('bridge unavailable', e); }
 }
 
-async function initStartupBtn() {
-  try {
-    const enabled = await window.chrome.webview.hostObjects.cornBridge.getStartupEnabled();
-    updateStartupBtn(enabled);
-  } catch(e) {}
+// ── 24h health history ───────────────────────────────────────────────────────
+// entries: [{ timestamp, score, alertCount }], one per minute, oldest first.
+function renderHistory(entries) {
+  const svg = document.getElementById('history-svg');
+  const caption = document.getElementById('history-caption');
+  if (!entries || entries.length < 2) { svg.innerHTML = ''; caption.textContent = 'Collecting data…'; return; }
+
+  const W = 240, H = 44, DAY = 86400000, now = Date.now();
+  const x = t => Math.max(0, W - (now - t) / DAY * W);
+  const y = v => H - 2 - (Math.max(0, Math.min(100, v)) / 100) * (H - 4);
+  // Break the line where the app wasn't running, instead of drawing across the gap.
+  const segments = []; let prev = null;
+  for (const e of entries) {
+    const t = new Date(e.timestamp).getTime();
+    if (prev === null || t - prev > 150000) segments.push([]);
+    segments[segments.length - 1].push(`${x(t).toFixed(1)},${y(e.score).toFixed(1)}`);
+    prev = t;
+  }
+  const scores = entries.map(e => e.score);
+  const min = Math.min(...scores), avg = scores.reduce((a,b) => a + b, 0) / scores.length;
+  // Safe: only numbers are interpolated.
+  svg.innerHTML = segments.map(pts => pts.length > 1
+    ? `<polyline class="spark-path" points="${pts.join(' ')}" stroke="${pctColor(100 - min)}"/>`
+    : `<circle cx="${pts[0].split(',')[0]}" cy="${pts[0].split(',')[1]}" r="1" fill="${pctColor(100 - min)}"/>`).join('');
+  const mins = entries.length, span = mins >= 60 ? `${Math.floor(mins/60)}h ${mins%60}m` : `${mins}m`;
+  caption.textContent = `avg ${avg.toFixed(0)} · low ${min} · ${span} recorded`;
 }
+
+async function refreshHistory() {
+  try { renderHistory(JSON.parse(await host().GetHealthHistory())); }
+  catch(e) { console.warn('history unavailable', e); }
+}
+
+// ── Settings dialog ──────────────────────────────────────────────────────────
+const THRESHOLDS = [
+  ['CPU usage %',  'cpuWarnPercent',     'cpuCritPercent'],
+  ['CPU temp °C',  'cpuWarnTempC',       'cpuCritTempC'],
+  ['RAM usage %',  'ramWarnPercent',     'ramCritPercent'],
+  ['Disk usage %', 'diskWarnPercent',    'diskCritPercent'],
+  ['GPU temp °C',  'gpuWarnTempC',       'gpuCritTempC'],
+  ['VRAM usage %', 'gpuVramWarnPercent', 'gpuVramCritPercent'],
+];
+const TOGGLES = [
+  ['Notify on critical alerts',  'notifyOnCritical'],
+  ['Start minimized to tray',    'startMinimized'],
+  ['Check for updates on start', 'checkForUpdates'],
+];
+let loadedSettings = null;
+
+function fillSettings(cfg) {
+  loadedSettings = cfg;
+  // Safe: labels and keys are the constants above; values are numbers/booleans.
+  const num = k => `<input type="number" id="set-${k}" value="${Number(cfg[k])}" min="1" step="1">`;
+  document.getElementById('settings-fields').innerHTML = `
+    <div style="display:flex;flex-direction:column;gap:7px">
+      <div class="set-group">General</div>
+      <div class="set-row single"><span>Poll interval (ms, 250–30000)</span>
+        <input type="number" id="set-pollIntervalMs" value="${Number(cfg.pollIntervalMs)}" min="250" max="30000" step="250"></div>
+      ${TOGGLES.map(([label, k]) => `<div class="set-row single"><span>${label}</span>
+        <input type="checkbox" id="set-${k}" ${cfg[k] ? 'checked' : ''}></div>`).join('')}
+      <div class="set-group">Alert thresholds</div>
+      <div class="set-row set-head"><span></span><span>Warning</span><span>Critical</span></div>
+      ${THRESHOLDS.map(([label, w, c]) => `<div class="set-row"><span>${label}</span>${num(w)}${num(c)}</div>`).join('')}
+    </div>`;
+}
+
+async function openSettings() {
+  try {
+    fillSettings(JSON.parse(await host().GetSettings()));
+    document.getElementById('settings-error').textContent = '';
+    document.getElementById('settings-overlay').classList.add('open');
+  } catch(e) { alert('Settings unavailable: ' + e); }
+}
+
+function closeSettings() { document.getElementById('settings-overlay').classList.remove('open'); }
+
+async function saveSettings() {
+  const err = document.getElementById('settings-error');
+  const cfg = { ...loadedSettings };
+  const read = k => Number(document.getElementById('set-' + k).value);
+  cfg.pollIntervalMs = Math.round(read('pollIntervalMs'));
+  for (const [, k] of TOGGLES) cfg[k] = document.getElementById('set-' + k).checked;
+  for (const [label, w, c] of THRESHOLDS) {
+    cfg[w] = read(w); cfg[c] = read(c);
+    if (!(cfg[w] > 0) || !(cfg[c] > 0)) { err.textContent = `${label}: enter a number above 0.`; return; }
+    if (cfg[w] > cfg[c]) { err.textContent = `${label}: warning must not exceed critical.`; return; }
+  }
+  if (!(cfg.pollIntervalMs >= 250 && cfg.pollIntervalMs <= 30000)) { err.textContent = 'Poll interval must be 250–30000 ms.'; return; }
+  try {
+    await host().SaveSettings(JSON.stringify(cfg));
+    closeSettings();
+  } catch(e) { err.textContent = 'Could not save: ' + e; }
+}
+
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeSettings(); });
 
 function updateProcessTable(procs) {
   const tbody = document.getElementById('proc-tbody');
@@ -576,34 +708,34 @@ function updateProcessTable(procs) {
         <span class="proc-bar" style="width:${barW}px;background:${pctColor(cpu)}"></span>
         <span style="color:${pctColor(cpu)}"> ${cpu.toFixed(1)}%</span>
       </td>
-      <td style="color:var(--amber);white-space:nowrap">${mb} MB</td>
+      <td style="color:var(--dim);white-space:nowrap">${mb} MB</td>
     </tr>`;
   }).join('');
 }
 
 async function showSensorDump() {
   try {
-    const dump = await window.chrome.webview.hostObjects.cornBridge.getGpuSensorDump();
+    const dump = await host().GetGpuSensorDump();
     const w = window.open('', '_blank', 'width=700,height=500');
     // Safe: dump is plain diagnostic text from C# — escape it before writing.
     const pre = w.document.createElement('pre');
-    pre.style.cssText = 'background:#0a0a0a;color:#6fcf6f;font-family:monospace;font-size:12px;padding:16px;white-space:pre-wrap';
-    pre.textContent = dump || 'No sensor data yet — wait a second and try again.';
-    w.document.body.style.margin = '0';
+    pre.style.cssText = 'background:#080812;color:#f5c842;font-family:monospace;font-size:12px;padding:16px;white-space:pre-wrap';
+    pre.textContent = dump || 'No GPU information available.';
+    w.document.title = 'CornWatch — GPU / sensor debug';
+    w.document.body.style.cssText = 'margin:0;background:#080812';
     w.document.body.appendChild(pre);
   } catch(e) { alert('Bridge unavailable: ' + e); }
 }
 
-function bridge(action) {
-  try {
-    if (action === 'taskmgr') window.chrome.webview.hostObjects.cornBridge.openProcessManager();
-    if (action === 'resmon')  window.chrome.webview.hostObjects.cornBridge.openResourceMonitor();
-  } catch(e) { console.warn('bridge unavailable', e); }
-}
-
 window.addEventListener('resize', drawNetChart);
 drawNetChart();
-initStartupBtn();
+refreshStartupBtn();
+refreshHistory();
+setInterval(refreshHistory, 60000);
+(async () => {
+  try { document.getElementById('app-version').textContent = 'v' + await host().GetVersion(); }
+  catch(e) { console.warn('bridge unavailable', e); }
+})();
 </script>
 </body>
 </html>

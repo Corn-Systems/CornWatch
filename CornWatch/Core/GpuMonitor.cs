@@ -1,262 +1,154 @@
 using System.Diagnostics;
-using System.Runtime.InteropServices;
 using CornWatch.Models;
 
 namespace CornWatch.Core;
 
 /// <summary>
-/// Reads GPU metrics using Windows-native APIs.
-/// VRAM total is read via DXGI IDXGIAdapter3::QueryVideoMemoryInfo (P/Invoke)
-/// which returns the true physical VRAM without the WMI 4GB cap.
+/// Reads load, VRAM and vendor sensors for every hardware GPU, largest VRAM first.
+/// Adapters (name, VRAM size, LUID) come from DXGI; load comes from the
+/// "GPU Engine" perf category, which has one instance per process per engine.
+/// The whole category is re-read every tick so processes that start or exit
+/// after launch are counted correctly.
 /// </summary>
-public sealed class gpuMonitor : IDisposable
+internal sealed class GpuMonitor : IDisposable
 {
-    private const StringComparison ic = StringComparison.OrdinalIgnoreCase;
+    private const StringComparison IgnoreCase = StringComparison.OrdinalIgnoreCase;
+    private const string EngineCategory = "GPU Engine", EngineCounter = "Utilization Percentage";
+    private const string MemoryCategory = "GPU Adapter Memory", MemoryCounter = "Dedicated Usage";
 
-    private static readonly string[] igpuHints = ["Radeon(TM) Graphics", "Intel", "UHD", "Iris"];
+    private sealed record GpuSlot(DxgiAdapter Adapter, PerformanceCounter? VramUsed, object? SensorDevice);
 
-    private readonly List<PerformanceCounter> threeDCounters = [], computeCounters = [], vramCounters = [];
-    private readonly string dgpuName;
-    private readonly string dgpuLuid;
-    private readonly float dgpuVramMb;
-    private bool disposed;
+    private readonly HardwareSensors _sensors;
+    private readonly List<GpuSlot> _slots = [];
+    private Dictionary<string, CounterSample> _prevSamples = new(StringComparer.OrdinalIgnoreCase);
+    private bool _engineReadFailed;
+    private bool _disposed;
 
-    public string debugSensorDump { get; private set; } = string.Empty;
+    public string DebugSensorDump { get; }
 
-    public gpuMonitor()
+    public GpuMonitor(HardwareSensors sensors)
     {
-        dgpuName = readGpuName();
-        dgpuLuid = findDgpuLuid();
-        dgpuVramMb = dxgiVram.getDedicatedVramMb(dgpuName);
-        initCounters();
+        this._sensors = sensors;
+        var adapters = DxgiAdapters.Enumerate();
+        var devices = sensors.MatchGpus([.. adapters.Select(a => a.Name)]);
+        var memoryInstances = InstanceNames(MemoryCategory);
+        for (var i = 0; i < adapters.Count; i++)
+            _slots.Add(new GpuSlot(adapters[i], CreateVramCounter(memoryInstances, adapters[i].LuidTag), devices[i]));
+
+        DebugSensorDump = (_slots.Count == 0
+            ? "No hardware GPU adapters found via DXGI."
+            : "Adapters (DXGI):\n" + string.Join("\n", _slots.Select(s =>
+                $"  {s.Adapter.Name}  VRAM={s.Adapter.DedicatedBytes / 1048576f:0} MB  {s.Adapter.LuidTag}  " +
+                $"vram-counter={(s.VramUsed is null ? "no" : "ok")}  sensors={(s.SensorDevice is null ? "no" : "ok")}")))
+            + "\n" + sensors.Describe();
+        SessionLog.Write("[GPU] " + DebugSensorDump.Replace("\n", " | "));
     }
 
-    public List<gpuInfo> read()
+    public List<GpuInfo> Read()
     {
-        var info = new gpuInfo
+        if (_disposed) return [];
+
+        var loads = ReadEngineLoads();
+        var result = new List<GpuInfo>(_slots.Count);
+        foreach (var slot in _slots)
         {
-            name = dgpuName,
-            vramTotalMb = dgpuVramMb,
-            usagePercent = Math.Min(100f, fold(threeDCounters, (a, b) => a + b, "GPU_READ_3D")),
-            computeUsagePercent = fold(computeCounters, Math.Max, "GPU_READ_COMPUTE"),
-            vramUsedMb = fold(vramCounters, (a, b) => a + b, "GPU_READ_VRAM") / 1048576f,
-        };
-        if (info.vramTotalMb > 0)
-            info.vramUsagePercent = Math.Min(100f, info.vramUsedMb / info.vramTotalMb * 100f);
-        return [info];
+            var reading = _sensors.ReadGpu(slot.SensorDevice);
+            var info = new GpuInfo
+            {
+                Name = slot.Adapter.Name,
+                VramTotalMb = slot.Adapter.DedicatedBytes / 1048576f,
+                TemperatureCelsius = reading.TemperatureCelsius,
+                FanRpm = reading.FanRpm,
+                PowerWatts = reading.PowerWatts,
+            };
+            if (loads.TryGetValue(slot.Adapter.LuidTag, out var load))
+            {
+                info.UsagePercent = Math.Clamp(load.threeD, 0f, 100f);
+                info.ComputeUsagePercent = Math.Clamp(load.compute, 0f, 100f);
+            }
+            if (slot.VramUsed is not null)
+                try { info.VramUsedMb = slot.VramUsed.NextValue() / 1048576f; }
+                catch (Exception ex) { SessionLog.Write("GPU_READ_VRAM", ex); }
+            if (info.VramTotalMb > 0)
+                info.VramUsagePercent = Math.Min(100f, info.VramUsedMb / info.VramTotalMb * 100f);
+            result.Add(info);
+        }
+        return result;
     }
 
     public void Dispose()
     {
-        if (disposed) return;
-        disposed = true;
-        foreach (var c in threeDCounters.Concat(computeCounters).Concat(vramCounters)) c.Dispose();
+        if (_disposed) return;
+        _disposed = true;
+        foreach (var slot in _slots) slot.VramUsed?.Dispose();
     }
 
-    private static float fold(List<PerformanceCounter> counters, Func<float, float, float> combine, string tag)
+    // Per adapter (keyed by LUID tag): utilisation summed across every process' 3D / Compute engines.
+    private Dictionary<string, (float threeD, float compute)> ReadEngineLoads()
     {
-        var acc = 0f;
-        foreach (var c in counters)
-            try { acc = combine(acc, c.NextValue()); }
-            catch (Exception ex) { sessionLog.write(tag, ex); }
-        return acc;
-    }
-
-    private static string readGpuName()
-    {
+        var loads = new Dictionary<string, (float threeD, float compute)>(StringComparer.OrdinalIgnoreCase);
+        if (_engineReadFailed || _slots.Count == 0) return loads;
         try
         {
-            var names = wmiQuery.query("SELECT Name FROM Win32_VideoController WHERE PNPDeviceID LIKE 'PCI%'",
-                    o => o["Name"]?.ToString()?.Trim() ?? string.Empty)
-                .Where(n => n.Length > 0 && !n.Contains("Microsoft Basic", ic) && !n.Contains("Virtual", ic))
-                .ToList();
-            // Prefer a dedicated GPU over an iGPU.
-            return names.FirstOrDefault(n => !igpuHints.Any(h => n.Contains(h, ic))) ?? names.LastOrDefault() ?? "GPU";
+            var instances = new PerformanceCounterCategory(EngineCategory).ReadCategory()[EngineCounter];
+            if (instances is null) return loads;
+
+            var samples = new Dictionary<string, CounterSample>(StringComparer.OrdinalIgnoreCase);
+            foreach (InstanceData inst in instances.Values)
+            {
+                var name = inst.InstanceName;
+                var is3D = name.Contains("engtype_3D", IgnoreCase);
+                if (!is3D && !name.Contains("engtype_Compute", IgnoreCase)) continue;
+                if (LuidTagOf(name) is not { } tag) continue;
+
+                samples[name] = inst.Sample;
+                if (!_prevSamples.TryGetValue(name, out var prev)) continue;
+                var value = CounterSample.Calculate(prev, inst.Sample);
+                if (!float.IsFinite(value)) continue;
+
+                var load = loads.GetValueOrDefault(tag);
+                loads[tag] = is3D ? (load.threeD + value, load.compute) : (load.threeD, load.compute + value);
+            }
+            _prevSamples = samples;
         }
         catch (Exception ex)
         {
-            sessionLog.write("GPU_WMI_NAME", ex);
-            return "GPU";
+            // Category missing (very old Windows / no WDDM 2.x driver) — don't retry every tick.
+            _engineReadFailed = true;
+            SessionLog.Write("GPU_READ_ENGINES", ex);
+        }
+        return loads;
+    }
+
+    // "pid_1234_luid_0x00000000_0x00014A30_phys_0_eng_0_engtype_3D" → "luid_0x00000000_0x00014A30"
+    internal static string? LuidTagOf(string instanceName)
+    {
+        const int tagLength = 26;
+        var start = instanceName.IndexOf("luid_0x", IgnoreCase);
+        return start < 0 || start + tagLength > instanceName.Length ? null : instanceName.Substring(start, tagLength);
+    }
+
+    private static string[] InstanceNames(string category)
+    {
+        try { return new PerformanceCounterCategory(category).GetInstanceNames(); }
+        catch (Exception ex)
+        {
+            SessionLog.Write($"GPU_INSTANCES {category}", ex);
+            return [];
         }
     }
 
-    private string findDgpuLuid()
+    private static PerformanceCounter? CreateVramCounter(string[] instances, string luidTag)
     {
         try
         {
-            var luidCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-            var luidHasCompute = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-            foreach (var inst in new PerformanceCounterCategory("GPU Engine").GetInstanceNames())
-            {
-                if (extractLuid(inst) is not { } luid) continue;
-                if (inst.Contains("engtype_3D", ic)) luidCounts[luid] = luidCounts.GetValueOrDefault(luid) + 1;
-                if (inst.Contains("engtype_Compute", ic)) luidHasCompute.Add(luid);
-            }
-
-            debugSensorDump = "LUIDs:\n" + string.Join("\n", luidCounts.Select(kv =>
-                $"  {kv.Key}  3D={kv.Value}  compute={luidHasCompute.Contains(kv.Key)}"));
-            if (luidCounts.Count == 0) return string.Empty;
-
-            var chosen = luidCounts.Where(kv => kv.Value > 1 && luidHasCompute.Contains(kv.Key))
-                             .OrderBy(kv => kv.Value).Select(kv => kv.Key).FirstOrDefault()
-                         ?? luidCounts.OrderBy(kv => kv.Value).First().Key;
-            debugSensorDump += $"\nChosen: {chosen}";
-            return chosen;
+            var instance = instances.FirstOrDefault(n => n.Contains(luidTag, IgnoreCase));
+            return instance is null ? null : new PerformanceCounter(MemoryCategory, MemoryCounter, instance);
         }
         catch (Exception ex)
         {
-            debugSensorDump = "LUID scan failed: " + ex.Message;
-            sessionLog.write("GPU_LUID", ex);
-            return string.Empty;
+            SessionLog.Write("GPU_VRAM_COUNTER", ex);
+            return null;
         }
-    }
-
-    private void initCounters()
-    {
-        if (dgpuLuid.Length == 0) return;
-
-        addCounters("GPU Engine", "Utilization Percentage", inst =>
-            inst.Contains("engtype_3D", ic) ? threeDCounters
-            : inst.Contains("engtype_Compute", ic) ? computeCounters
-            : null);
-        addCounters("GPU Process Memory", "Dedicated Usage", _ => vramCounters);
-
-        debugSensorDump += $"\n3D={threeDCounters.Count} Compute={computeCounters.Count} " +
-                           $"VRAM-used-counters={vramCounters.Count} VRAM-total={dgpuVramMb:0}MB";
-    }
-
-    // Creates a primed counter for every instance of this GPU that `pick` routes to a list.
-    private void addCounters(string category, string counter, Func<string, List<PerformanceCounter>?> pick)
-    {
-        try
-        {
-            foreach (var inst in new PerformanceCounterCategory(category).GetInstanceNames())
-            {
-                if (!inst.Contains(dgpuLuid, ic) || pick(inst) is not { } target) continue;
-                PerformanceCounter? c = null;
-                try
-                {
-                    c = new PerformanceCounter(category, counter, inst);
-                    _ = c.NextValue();
-                    target.Add(c);
-                }
-                catch (Exception ex)
-                {
-                    c?.Dispose();
-                    sessionLog.write($"[GPU] {category} counter '{inst}'", ex);
-                }
-            }
-        }
-        catch (Exception ex) { sessionLog.write($"GPU_COUNTERS_{category}", ex); }
-    }
-
-    private static string? extractLuid(string inst)
-    {
-        var parts = inst.Split('_');
-        for (var i = 0; i < parts.Length - 3; i++)
-            if (parts[i].Equals("luid", ic))
-                return parts[i + 1] + "_" + parts[i + 2];
-        return null;
-    }
-}
-
-/// <summary>
-/// Uses DXGI via P/Invoke to get true physical dedicated VRAM.
-/// IDXGIFactory1 → EnumAdapters1 → IDXGIAdapter3::QueryVideoMemoryInfo
-/// This bypasses all WMI 32-bit field limitations.
-/// </summary>
-internal static class dxgiVram
-{
-    [DllImport("dxgi.dll", EntryPoint = "CreateDXGIFactory1")]
-    private static extern int createDxgiFactory1(ref Guid riid, out IntPtr factory);
-
-    private static readonly Guid iidFactory1 = new("770aae78-f26f-4dba-a829-253c83d1b387");
-    private static readonly Guid iidAdapter3 = new("645967a4-1392-4310-a798-8053ce3e93fd");
-
-    // COM vtable slots.
-    private const int querySlot = 0, releaseSlot = 2, getDesc1Slot = 10, enumAdapters1Slot = 12, queryVideoMemoryInfoSlot = 14;
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct dxgiQueryVideoMemoryInfo
-    {
-        public ulong budget, currentUsage, availableForReservation, currentReservation;
-    }
-
-    private enum dxgiMemorySegmentGroup { local }
-
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-    private struct dxgiAdapterDesc1
-    {
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
-        public string description;
-        public uint vendorId, deviceId, subSysId, revision;
-        public UIntPtr dedicatedVideoMemory, dedicatedSystemMemory, sharedSystemMemory;
-        public long adapterLuid;
-        public uint flags;
-    }
-
-    [UnmanagedFunctionPointer(CallingConvention.StdCall)] private delegate int queryInterfaceDelegate(IntPtr self, ref Guid riid, out IntPtr ppvObject);
-    [UnmanagedFunctionPointer(CallingConvention.StdCall)] private delegate int getDesc1Delegate(IntPtr self, ref dxgiAdapterDesc1 desc);
-    [UnmanagedFunctionPointer(CallingConvention.StdCall)] private delegate uint releaseDelegate(IntPtr self);
-    [UnmanagedFunctionPointer(CallingConvention.StdCall)] private delegate int enumAdapters1Delegate(IntPtr self, uint index, out IntPtr ppAdapter);
-    [UnmanagedFunctionPointer(CallingConvention.StdCall)] private delegate int queryVideoMemoryInfoDelegate(IntPtr self, uint nodeIndex, dxgiMemorySegmentGroup group, ref dxgiQueryVideoMemoryInfo info);
-
-    public static float getDedicatedVramMb(string gpuNameHint)
-    {
-        try
-        {
-            var factoryGuid = iidFactory1;
-            if (createDxgiFactory1(ref factoryGuid, out var factory) != 0 || factory == IntPtr.Zero) return 0f;
-
-            try
-            {
-                var enumAdapters1 = fn<enumAdapters1Delegate>(factory, enumAdapters1Slot);
-                // First-word match works for any vendor ("AMD", "NVIDIA", ...).
-                var hint = gpuNameHint.Split(' ')[0];
-
-                for (uint i = 0; enumAdapters1(factory, i, out var adapter) == 0 && adapter != IntPtr.Zero; i++)
-                    try
-                    {
-                        var desc = new dxgiAdapterDesc1();
-                        fn<getDesc1Delegate>(adapter, getDesc1Slot)(adapter, ref desc);
-                        if (hint.Length > 0 && !desc.description.Contains(hint, StringComparison.OrdinalIgnoreCase)) continue;
-
-                        var mb = queryBudgetMb(adapter);
-                        if (mb > 0) return mb;
-                    }
-                    finally { release(adapter); }
-                return 0f;
-            }
-            finally { release(factory); }
-        }
-        catch (Exception ex)
-        {
-            sessionLog.write("DXGI_VRAM", ex);
-            return 0f;
-        }
-    }
-
-    private static float queryBudgetMb(IntPtr adapter)
-    {
-        var iid = iidAdapter3;
-        if (fn<queryInterfaceDelegate>(adapter, querySlot)(adapter, ref iid, out var adapter3) != 0 || adapter3 == IntPtr.Zero)
-            return 0f;
-        try
-        {
-            var info = new dxgiQueryVideoMemoryInfo();
-            var hr = fn<queryVideoMemoryInfoDelegate>(adapter3, queryVideoMemoryInfoSlot)(adapter3, 0, dxgiMemorySegmentGroup.local, ref info);
-            return hr == 0 ? info.budget / 1048576f : 0f;
-        }
-        finally { release(adapter3); }
-    }
-
-    private static T fn<T>(IntPtr obj, int slot) where T : Delegate =>
-        Marshal.GetDelegateForFunctionPointer<T>(Marshal.ReadIntPtr(Marshal.ReadIntPtr(obj), slot * IntPtr.Size));
-
-    private static void release(IntPtr ptr)
-    {
-        try { fn<releaseDelegate>(ptr, releaseSlot)(ptr); }
-        catch { /* best-effort */ }
     }
 }

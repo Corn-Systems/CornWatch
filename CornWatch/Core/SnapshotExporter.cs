@@ -5,26 +5,26 @@ using CornWatch.Models;
 namespace CornWatch.Core;
 
 /// <summary>
-/// Serialises a systemSnapshot (compact for the JS bridge, indented for export)
-/// and writes exports to the Snapshots folder resolved by appPaths.
+/// Serialises a SystemSnapshot (compact for the JS bridge, indented for export)
+/// and writes exports to the Snapshots folder resolved by AppPaths.
 /// </summary>
-public static class snapshotExporter
+public static class SnapshotExporter
 {
-    private static readonly JsonSerializerOptions compact = createOptions(false);
-    private static readonly JsonSerializerOptions indented = createOptions(true);
+    private static readonly JsonSerializerOptions _compact = CreateOptions(false);
+    private static readonly JsonSerializerOptions _indented = CreateOptions(true);
 
-    public static string toJson(systemSnapshot snap, bool indent = false) =>
-        JsonSerializer.Serialize(snap, indent ? indented : compact);
+    public static string ToJson(SystemSnapshot snap, bool indent = false) =>
+        JsonSerializer.Serialize(snap, indent ? _indented : _compact);
 
-    public static string export(systemSnapshot snap)
+    public static string Export(SystemSnapshot snap)
     {
-        var path = appPaths.snapshotFile(snap.timestamp, "json");
-        File.WriteAllText(path, toJson(snap, indent: true));
-        sessionLog.write($"[EXPORT] JSON snapshot written to {path}");
+        var path = AppPaths.SnapshotFile(snap.Timestamp, "json");
+        File.WriteAllText(path, ToJson(snap, indent: true));
+        SessionLog.Write($"[EXPORT] JSON snapshot written to {path}");
         return path;
     }
 
-    private static JsonSerializerOptions createOptions(bool writeIndented) => new()
+    private static JsonSerializerOptions CreateOptions(bool writeIndented) => new()
     {
         WriteIndented = writeIndented,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,

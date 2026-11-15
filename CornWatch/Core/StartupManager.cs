@@ -8,43 +8,43 @@ namespace CornWatch.Core;
 /// The value written is always the current exe path, so reinstalling to a new
 /// location heals any stale entry.
 /// </summary>
-public static class startupManager
+public static class StartupManager
 {
-    private const string runKey = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Run";
+    private const string RunKey = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Run";
 
-    private static string entryValue => $"\"{AppContext.BaseDirectory}{appInfo.name}.exe\" --minimized";
+    private static string EntryValue => $"\"{AppContext.BaseDirectory}{AppInfo.Name}.exe\" --minimized";
 
-    public static bool isEnabled
+    public static bool IsEnabled
     {
         get
         {
             try
             {
-                using var key = Registry.CurrentUser.OpenSubKey(runKey, false);
-                return key?.GetValue(appInfo.name) is not null;
+                using var key = Registry.CurrentUser.OpenSubKey(RunKey, false);
+                return key?.GetValue(AppInfo.Name) is not null;
             }
             catch (Exception ex)
             {
-                sessionLog.write("STARTUP_READ", ex);
+                SessionLog.Write("STARTUP_READ", ex);
                 return false;
             }
         }
     }
 
     /// <summary>Registers or removes the startup entry; logs and rethrows on failure.</summary>
-    public static void setEnabled(bool enabled)
+    public static void SetEnabled(bool enabled)
     {
         try
         {
-            using var key = Registry.CurrentUser.OpenSubKey(runKey, true)
+            using var key = Registry.CurrentUser.OpenSubKey(RunKey, true)
                 ?? throw new InvalidOperationException("Could not open Run registry key.");
-            if (enabled) key.SetValue(appInfo.name, entryValue);
-            else key.DeleteValue(appInfo.name, throwOnMissingValue: false);
-            sessionLog.write(enabled ? "[STARTUP] enabled: " + entryValue : "[STARTUP] disabled");
+            if (enabled) key.SetValue(AppInfo.Name, EntryValue);
+            else key.DeleteValue(AppInfo.Name, throwOnMissingValue: false);
+            SessionLog.Write(enabled ? "[STARTUP] enabled: " + EntryValue : "[STARTUP] disabled");
         }
         catch (Exception ex)
         {
-            sessionLog.write("STARTUP_SET", ex);
+            SessionLog.Write("STARTUP_SET", ex);
             throw;
         }
     }
