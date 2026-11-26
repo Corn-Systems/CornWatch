@@ -6,7 +6,7 @@ namespace CornWatch.UI.Dashboard;
 // JS ↔ C# bridge, exposed to the dashboard as window.chrome.webview.hostObjects.cornBridge.
 // Structured data crosses as JSON strings.
 [ComVisible(true)]
-public class CornBridge(MainForm form, SystemMonitor monitor)
+public class CornBridge(MainForm form)
 {
     public string GetVersion() => AppInfo.Version;
 
@@ -14,7 +14,7 @@ public class CornBridge(MainForm form, SystemMonitor monitor)
 
     public void OpenResourceMonitor() => MainForm.Launch("resmon.exe");
 
-    public string GetGpuSensorDump() => monitor.GpuSensorDump;
+    public string GetGpuSensorDump() => form.Monitor?.GpuSensorDump ?? "Sensors are still starting — try again in a moment.";
 
     public bool GetStartupEnabled() => StartupManager.IsEnabled;
 
@@ -29,6 +29,20 @@ public class CornBridge(MainForm form, SystemMonitor monitor)
         form.ApplySettings();
         return SettingsManager.ToJson();
     }
+
+    // ── Top Processes row actions. Each returns "" on success, otherwise a message to show. ──
+
+    public string KillProcess(int pid) => ProcessActions.Kill(pid);
+
+    public string KillProcessGroup(string name) => ProcessActions.KillAll(name);
+
+    public string OpenProcessLocation(int pid) => ProcessActions.OpenLocation(pid);
+
+    public void SearchProcessOnline(string name) => ProcessActions.SearchOnline(name);
+
+    public bool IsProcessProtected(string name) => ProcessActions.IsProtected(name);
+
+    public bool GetOverlayEnabled() => SettingsManager.Current.OverlayEnabled;
 
     /// <summary>Last 24 hours of per-minute health scores.</summary>
     public string GetHealthHistory() => HealthHistory.Instance.ToJson();

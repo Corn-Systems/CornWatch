@@ -4,6 +4,8 @@ using Microsoft.Web.WebView2.WinForms;
 using CornSystems;
 using CornWatch.Core;
 using CornWatch.Models;
+using CornWatch.UI.Overlay;
+using CornWatch.UI.Tray;
 
 namespace CornWatch.UI.Dashboard;
 
@@ -16,10 +18,19 @@ public class MainForm : Form
     // 96-DPI ("logical") pixels; scaled with Dpi.S() for the monitor the window is on.
     private static readonly Size _minLogicalSize = new(960, 640);
 
-    private readonly SystemMonitor _monitor;
     private readonly AppSettings _settings = SettingsManager.Current;
     private readonly NotifyIcon _trayIcon;
+    private readonly Icon _trayBaseIcon;
+    private readonly ToolStripMenuItem _overlayItem = new("Show overlay") { ShortcutKeyDisplayString = OverlayForm.HotkeyText };
+    private readonly HotkeyWindow _overlayHotkey;
     private readonly CancellationTokenSource _cts = new();
+
+    // Built on a background thread (see StartMonitorAsync); null for the first moment after launch.
+    private SystemMonitor? _monitor;
+    private OverlayForm? _overlay;
+    private Icon? _trayStatusIcon;                       // owned; null while the plain icon is shown
+    private TrayStatusIcon.Level _trayLevel = TrayStatusIcon.Level.Ok;
+    private bool _closing;
 
     // Critical-alert notification state; only touched on the poll thread.
     private readonly Dictionary<string, DateTime> _alertNotifiedUtc = [];
@@ -33,6 +44,8 @@ public class MainForm : Form
     private bool _startHidden, _trayHintShown, _webViewStarted;
 
     internal SystemSnapshot? LastSnapshot { get; private set; }
+    internal SystemMonitor? Monitor => _monitor;
+    private bool OverlayVisible => _overlay is { Visible: true };
 
     public MainForm(bool startMinimized = false)
     {
@@ -46,26 +59,52 @@ public class MainForm : Form
         DpiChanged += OnFormDpiChanged;
 
         // Load each icon at the size it is drawn at, so the multi-size .ico stays sharp at any scaling.
-        var icoPath = Path.Combine(AppContext.BaseDirectory, "assets", "cornwatch.ico");
         Icon? trayImage = null;
-        if (File.Exists(icoPath))
-            try
-            {
-                Icon = new Icon(icoPath, SystemInformation.IconSize);
-                trayImage = new Icon(icoPath, SystemInformation.SmallIconSize);
-            }
-            catch (Exception ex) { SessionLog.Write("MAINFORM_ICON", ex); }
+        try
+        {
+            Icon = AppResources.LoadIcon(SystemInformation.IconSize);
+            trayImage = AppResources.LoadIcon(SystemInformation.SmallIconSize);
+        }
+        catch (Exception ex) { SessionLog.Write("MAINFORM_ICON", ex); }
 
-        _trayIcon = CreateTrayIcon(trayImage ?? Icon ?? SystemIcons.Application);
+        _trayBaseIcon = trayImage ?? Icon ?? SystemIcons.Application;
+        _trayIcon = CreateTrayIcon(_trayBaseIcon);
         _startHidden = _inTray = startMinimized;
 
-        _monitor = new SystemMonitor(PollInterval);
-        _monitor.SnapshotReady += OnSnapshotReady;
+        _overlayHotkey = new HotkeyWindow(NativeMethods.MOD_CONTROL | NativeMethods.MOD_ALT, Keys.O);
+        _overlayHotkey.Pressed += () => SetOverlayVisible(!OverlayVisible);
+        if (!_overlayHotkey.IsRegistered) _overlayItem.ShortcutKeyDisplayString = null;
 
+        _ = StartMonitorAsync(PollInterval);
         if (_settings.CheckForUpdates) _ = CheckForUpdateAsync();
     }
 
-    private int PollInterval => _inTray ? Math.Max(TrayPollIntervalMs, _settings.PollIntervalMs) : _settings.PollIntervalMs;
+    // Polls slowly from the tray, unless the overlay is up and needs live numbers.
+    private int PollInterval => _inTray && !OverlayVisible
+        ? Math.Max(TrayPollIntervalMs, _settings.PollIntervalMs)
+        : _settings.PollIntervalMs;
+
+    // LibreHardwareMonitor, WMI and the performance counters take a second or two to open.
+    // Doing that off the UI thread lets the window and the dashboard appear straight away.
+    private async Task StartMonitorAsync(int intervalMs)
+    {
+        try
+        {
+            var monitor = await Task.Run(() => new SystemMonitor(intervalMs));
+            if (_closing)
+            {
+                monitor.Dispose();
+                return;
+            }
+            _monitor = monitor;
+            monitor.SnapshotReady += OnSnapshotReady;
+            monitor.SetPollInterval(PollInterval); // the window may have moved to or from the tray meanwhile
+        }
+        catch (Exception ex) { SessionLog.Write("MONITOR_START", ex); }
+    }
+
+    // Another launch of CornWatch asked for the window (called on a thread-pool thread).
+    internal void ShowFromAnotherLaunch() => Post(ShowWindow);
 
     internal static void Launch(string file, string args = "")
     {
@@ -76,7 +115,34 @@ public class MainForm : Form
     internal static void OpenInExplorer(string path) => Launch("explorer.exe", $"/select,\"{path}\"");
 
     // Called by the bridge after the dashboard saved new settings.
-    internal void ApplySettings() => _monitor.SetPollInterval(PollInterval);
+    internal void ApplySettings()
+    {
+        if (_settings.OverlayEnabled != OverlayVisible) SetOverlayVisible(_settings.OverlayEnabled);
+        else _overlay?.ApplySettings(_settings);
+        _monitor?.SetPollInterval(PollInterval);
+    }
+
+    // Overlay on/off from the hotkey, tray menu or dashboard; remembered for next launch.
+    internal void SetOverlayVisible(bool visible)
+    {
+        if (_closing) return;
+        if (visible)
+        {
+            _overlay ??= new OverlayForm();
+            _overlay.ApplySettings(_settings);
+            if (LastSnapshot is { } snap) _overlay.UpdateSnapshot(snap);
+            _overlay.Show();
+        }
+        else _overlay?.Hide();
+
+        _overlayItem.Checked = visible;
+        if (_settings.OverlayEnabled != visible)
+        {
+            _settings.OverlayEnabled = visible;
+            SettingsManager.Save();
+        }
+        _monitor?.SetPollInterval(PollInterval);
+    }
 
     internal async void ExportPngFromUi()
     {
@@ -125,6 +191,7 @@ public class MainForm : Form
             if (WindowState == FormWindowState.Normal) CenterToScreen();
         }
         _ = InitWebViewAsync();
+        if (_settings.OverlayEnabled) BeginInvoke(() => SetOverlayVisible(true));
     }
 
     protected override void OnResize(EventArgs e)
@@ -162,10 +229,14 @@ public class MainForm : Form
         _settings.WindowState = _restoreState == FormWindowState.Maximized ? "Maximized" : "Normal";
         SettingsManager.Save();
 
+        _closing = true;
         _cts.Cancel();
         _trayIcon.Visible = false;
         _trayIcon.Dispose();
-        _monitor.Dispose();
+        _trayStatusIcon?.Dispose();
+        _overlayHotkey.Dispose();
+        _overlay?.Dispose();
+        _monitor?.Dispose();
         base.OnFormClosing(e);
     }
 
@@ -216,14 +287,28 @@ public class MainForm : Form
             }
         };
 
-        var menu = new ContextMenuStrip();
-        menu.Items.Add("Open CornWatch", null, (_, _) => ShowWindow());
+        _overlayItem.Click += (_, _) => SetOverlayVisible(!OverlayVisible);
+
+        var menu = new ContextMenuStrip
+        {
+            Renderer = new TrayMenuRenderer(),
+            Font = new Font("Courier New", 9f),
+            ShowImageMargin = true,
+        };
+        menu.Items.Add(new ToolStripMenuItem($"{AppInfo.Name} v{AppInfo.Version}") { Enabled = false, Tag = "header" });
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add("Open dashboard", null, (_, _) => ShowWindow());
+        menu.Items.Add(_overlayItem);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(startupItem);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Exit", null, (_, _) => Application.Exit());
         // The dashboard has its own startup toggle, so re-read the real state each time the menu opens.
-        menu.Opening += (_, _) => startupItem.Checked = StartupManager.IsEnabled;
+        menu.Opening += (_, _) =>
+        {
+            startupItem.Checked = StartupManager.IsEnabled;
+            _overlayItem.Checked = OverlayVisible;
+        };
 
         var icon = new NotifyIcon
         {
@@ -253,7 +338,7 @@ public class MainForm : Form
         Show();
         WindowState = _restoreState;
         Activate();
-        _monitor.SetPollInterval(PollInterval);
+        _monitor?.SetPollInterval(PollInterval);
     }
 
     private void HideToTray()
@@ -261,7 +346,7 @@ public class MainForm : Form
         _inTray = true;
         ShowInTaskbar = false;
         Hide();
-        _monitor.SetPollInterval(PollInterval);
+        _monitor?.SetPollInterval(PollInterval);
     }
 
     private async Task CheckForUpdateAsync()
@@ -290,11 +375,10 @@ public class MainForm : Form
             var environment = await CoreWebView2Environment.CreateAsync(null, AppPaths.WebViewDataDir);
             await view.EnsureCoreWebView2Async(environment);
 
-            var htmlPath = Path.Combine(AppContext.BaseDirectory, "UI", "Dashboard", "Dashboard.html");
-            if (!File.Exists(htmlPath)) throw new FileNotFoundException("Dashboard.html is missing from the install folder.", htmlPath);
+            var htmlPath = AppResources.ExtractDashboard();
 
             var core = view.CoreWebView2;
-            core.AddHostObjectToScript("cornBridge", new CornBridge(this, _monitor));
+            core.AddHostObjectToScript("cornBridge", new CornBridge(this));
 #if !DEBUG
             core.Settings.AreDefaultContextMenusEnabled = false;
             core.Settings.IsStatusBarEnabled = false;
@@ -333,6 +417,11 @@ public class MainForm : Form
     {
         LastSnapshot = snap;
         NotifyNewCriticalAlerts(snap);
+        Post(() =>
+        {
+            UpdateTrayStatus(snap);
+            if (OverlayVisible) _overlay!.UpdateSnapshot(snap);
+        });
         // Nobody can see the dashboard from the tray, so don't make it re-render every tick.
         // ShowWindow() resets the poll timer, which pushes a fresh snapshot straight away.
         if (!_webViewReady || _inTray) return;
@@ -359,6 +448,26 @@ public class MainForm : Form
             if (ContainsFocus) return; // already looking at the dashboard
             ShowBalloon("CornWatch — critical alert", text, ToolTipIcon.Warning, ShowWindow);
         });
+    }
+
+    // Tooltip shows the score; the icon gains an amber/red dot while warnings/critical alerts are active.
+    private void UpdateTrayStatus(SystemSnapshot snap)
+    {
+        if (_closing) return;
+        var tip = TrayStatusIcon.Tooltip(snap);
+        if (_trayIcon.Text != tip) _trayIcon.Text = tip;
+
+        var level = TrayStatusIcon.LevelOf(snap);
+        if (level == _trayLevel) return;
+        _trayLevel = level;
+        var old = _trayStatusIcon;
+        try
+        {
+            _trayStatusIcon = level == TrayStatusIcon.Level.Ok ? null : TrayStatusIcon.Render(_trayBaseIcon, level);
+            _trayIcon.Icon = _trayStatusIcon ?? _trayBaseIcon;
+        }
+        catch (Exception ex) { SessionLog.Write("TRAY_STATUS_ICON", ex); }
+        old?.Dispose();
     }
 
     private void Post(Action action)

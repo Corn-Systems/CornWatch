@@ -3,7 +3,27 @@
 All notable changes to CornWatch are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.4.0] — 2026-11-26
+
+### Added
+
+- **In-game overlay ("CornWatch Overlay"):** a small always-on-top readout of CPU % and temperature, GPU % and temperature, RAM and battery. Clicks pass through it and it never takes focus, so it can sit over a game. Toggle it with **Ctrl+Alt+O** (global hotkey), the tray menu or Settings. Settings also pick the corner and opacity. It stays sharp at any display scaling, and the choice is remembered.
+- **Drive health panel:** every physical drive with Windows' own health verdict (Healthy / Warning / Failing), its type (NVMe / SSD / HDD) and size. When run as administrator, it also shows SMART wear ("% worn") and temperature. A failing drive raises a critical alert (−25), a drive warning raises a warning (−10), and a drive past 90% of its rated life raises a warning (−5). USB and SD drives are shown but not scored. Virtual disks are skipped.
+- **Battery panel (laptops):** charge, power source (charging / plugged in / on battery), charge or discharge rate in watts, time left, wear, and full-charge vs design capacity. It's hidden on desktops. Battery at 10% or less while unplugged raises a warning. A battery that has lost 40% or more of its capacity gets an informational note.
+- **Process actions:** click (or right-click) a row in Top Processes to **End process**, **End all N** for grouped rows, **Open file location**, or **Search online**. Ending takes a second click to confirm. Windows system processes (csrss, lsass, svchost, dwm…) and CornWatch itself can't be ended. Errors such as access denied are explained in the menu.
+- **Health in the tray:** the tray tooltip shows the health score and alert count, and the icon gets an amber dot for warnings or a red dot for critical alerts.
+- **Opening CornWatch again brings it forward.** A second launch now shows the running window instead of a "check the tray" message box. The startup entry (`--minimized`) exits quietly if CornWatch is already running.
+- **Portable build:** the dashboard and icon are embedded in `CornWatch.exe`, so the published exe runs on its own from any folder. The installer now installs that single exe.
+- Tests for drive health mapping, the new health checks, overlay settings, tray status and process protection.
+
+### Changed
+
+- **Faster startup:** sensors, WMI and performance counters now open on a background thread. The window and dashboard appear straight away and fill in within a second or two.
+- **Themed tray menu:** dark Corn Systems colours with a gold title, gold highlight and gold check marks, replacing the default grey menu. Menu entries are Open dashboard, Show overlay, Launch at startup and Exit.
+- Polling stays at the normal rate in the tray while the overlay is showing.
+- LibreHardwareMonitor now also reads the battery, and drives when elevated. The GPU / Sensor Debug window lists them.
+- `Dashboard.html` is written to `%LocalAppData%\CornSystems\CornWatch\UI` at startup and loaded from there, instead of from the install folder.
+- Installer: installs only `CornWatch.exe`, and removes the `UI\` and `assets\` folders that 0.3.0 left in the install folder.
 
 ### Fixed
 

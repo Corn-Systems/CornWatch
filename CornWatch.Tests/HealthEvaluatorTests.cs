@@ -135,4 +135,52 @@ public class HealthEvaluatorTests
         Assert.Equal(100, snap.HealthScore);
         Assert.Empty(snap.Alerts);
     }
+
+    [Fact]
+    public void FailingDriveIsCritical()
+    {
+        var snap = Evaluated(s => s.PhysicalDisks.Add(new PhysicalDiskInfo { Name = "Disk A", Health = DriveHealth.Unhealthy }));
+        Assert.Equal(100 - HealthEvaluator.DriveFailingPoints, snap.HealthScore);
+        Assert.Equal(AlertSeverity.Critical, Assert.Single(snap.Alerts).Severity);
+    }
+
+    [Fact]
+    public void DriveWarningAndHeavyWearBothReport()
+    {
+        var snap = Evaluated(s => s.PhysicalDisks.Add(new PhysicalDiskInfo { Name = "Disk A", Health = DriveHealth.Warning, WearPercent = 95f }));
+        Assert.Equal(100 - HealthEvaluator.DriveWarningPoints - HealthEvaluator.DriveWornPoints, snap.HealthScore);
+        Assert.Equal(2, snap.Alerts.Count);
+        Assert.All(snap.Alerts, a => Assert.Equal(AlertSeverity.Warning, a.Severity));
+    }
+
+    [Fact]
+    public void HealthyOrRemovableDrivesCostNothing()
+    {
+        var snap = Evaluated(s =>
+        {
+            s.PhysicalDisks.Add(new PhysicalDiskInfo { Name = "Disk A", Health = DriveHealth.Healthy, WearPercent = 10f });
+            s.PhysicalDisks.Add(new PhysicalDiskInfo { Name = "USB", Health = DriveHealth.Unhealthy, IsRemovable = true });
+        });
+        Assert.Equal(100, snap.HealthScore);
+        Assert.Empty(snap.Alerts);
+    }
+
+    [Theory]
+    [InlineData(8f, false, true)]   // low and unplugged
+    [InlineData(8f, true, false)]   // low but charging
+    [InlineData(50f, false, false)]
+    public void LowBatteryWarnsOnlyWhenUnplugged(float charge, bool onAc, bool expectAlert)
+    {
+        var snap = Evaluated(s => s.Battery = new BatteryInfo { ChargePercent = charge, OnAcPower = onAc });
+        Assert.Equal(expectAlert, snap.Alerts.Any(a => a.Id == "battery.low"));
+        Assert.Equal(expectAlert ? 100 - HealthEvaluator.BatteryLowPoints : 100, snap.HealthScore);
+    }
+
+    [Fact]
+    public void WornBatteryIsInformationalAndFree()
+    {
+        var snap = Evaluated(s => s.Battery = new BatteryInfo { ChargePercent = 80f, OnAcPower = true, WearPercent = 45f });
+        Assert.Equal(100, snap.HealthScore);
+        Assert.Equal(AlertSeverity.Info, Assert.Single(snap.Alerts).Severity);
+    }
 }

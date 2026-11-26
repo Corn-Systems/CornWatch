@@ -24,6 +24,8 @@ public class SystemSnapshot
     public float RamUsagePercent => RamTotalBytes > 0 ? (float)RamUsedBytes / RamTotalBytes * 100f : 0f;
 
     public List<DiskInfo> Disks { get; set; } = [];
+    /// <summary>Physical drives with Windows' health verdict (and wear/temperature when elevated).</summary>
+    public List<PhysicalDiskInfo> PhysicalDisks { get; set; } = [];
     public float DiskReadMbps { get; set; }
     public float DiskWriteMbps { get; set; }
 
@@ -33,6 +35,9 @@ public class SystemSnapshot
 
     /// <summary>Every hardware GPU, largest VRAM first.</summary>
     public List<GpuInfo> Gpus { get; set; } = [];
+
+    /// <summary>Null on PCs without a battery.</summary>
+    public BatteryInfo? Battery { get; set; }
 
     public int HealthScore { get; set; }
     public List<ProcessEntry> Processes { get; set; } = [];
@@ -63,6 +68,37 @@ public class DiskInfo
     public string DriveFormat { get; set; } = string.Empty;
     /// <summary>USB sticks, SD cards: shown on the dashboard but not scored — a full flash drive isn't a system problem.</summary>
     public bool IsRemovable { get; set; }
+}
+
+public class PhysicalDiskInfo
+{
+    public string Name { get; set; } = string.Empty;
+    /// <summary>"NVMe", "SSD", "HDD" or "Drive" when Windows doesn't say.</summary>
+    public string Kind { get; set; } = "Drive";
+    public long SizeBytes { get; set; }
+    public DriveHealth Health { get; set; } = DriveHealth.Unknown;
+    public float? TemperatureCelsius { get; set; }
+    /// <summary>Share of the drive's rated write endurance used up (0 = new). Null when not readable.</summary>
+    public float? WearPercent { get; set; }
+    /// <summary>USB / SD: shown, but not scored.</summary>
+    public bool IsRemovable { get; set; }
+}
+
+public enum DriveHealth { Healthy, Warning, Unhealthy, Unknown }
+
+public class BatteryInfo
+{
+    public float ChargePercent { get; set; }
+    public bool OnAcPower { get; set; }
+    public bool IsCharging { get; set; }
+    /// <summary>Charge or discharge rate, always positive. Null when the battery doesn't report it.</summary>
+    public float? RateWatts { get; set; }
+    /// <summary>Capacity lost versus design (0 = like new).</summary>
+    public float? WearPercent { get; set; }
+    public float? DesignedCapacityWh { get; set; }
+    public float? FullChargeCapacityWh { get; set; }
+    /// <summary>Estimated time until empty while discharging; null otherwise or when unknown.</summary>
+    public int? RemainingSeconds { get; set; }
 }
 
 public class HealthAlert

@@ -17,17 +17,23 @@ Real-time system health monitoring with a Corn Systems-themed WebView2 dashboard
 | **Network Chart**    | Live send/recv graph, Mbps readouts, active adapter       |
 | **CPU Core Heatmap** | Per-core colour-coded usage grid                          |
 | **Disk I/O & Space** | R/W MB/s, per-drive fill bars                             |
-| **Top Processes**    | Live top-8 process groups by CPU% (grouped like Task Mgr) |
+| **Drive Health**     | Windows' health verdict per drive; wear + temp as admin   |
+| **Battery**          | Charge, power source, rate, time left, wear (laptops)     |
+| **Top Processes**    | Top-8 process groups by CPU%; click one to end it, open its folder or search for it |
 | **Health Alerts**    | Auto-generated warnings + critical flags (configurable)   |
 | **Health Score**     | Composite 0–100 rating with a 24-hour history chart       |
 | **Snapshot Export**  | One-click JSON or PNG snapshot to Documents               |
 | **Tray Mode**        | Minimizes to tray, optional launch-at-startup toggle      |
+| **Tray Status**      | Tooltip shows the score; icon gets an amber/red dot on alerts |
+| **Overlay**          | Always-on-top, click-through CPU/GPU/RAM/battery readout for gaming (Ctrl+Alt+O) |
 | **Notifications**    | Tray balloon when a new critical alert appears            |
 | **Settings Panel**   | Poll interval, alert thresholds and toggles, in the UI    |
 | **Update Check**     | Background check against GitHub Releases on startup       |
 
 While minimized to the tray, polling automatically slows to 5s to stay out
-of the way; it returns to the configured interval when the window is reopened.
+of the way (unless the overlay is showing); it returns to the configured interval
+when the window is reopened. Launching CornWatch again while it is running brings
+the existing window forward.
 
 ---
 
@@ -35,7 +41,10 @@ of the way; it returns to the configured interval when the window is reopened.
 
 ```
 CornWatch/
-├── Program.cs                   Entry point (single-instance, crash handler)
+├── Program.cs                   Entry point (crash handler)
+├── SingleInstance.cs            One copy per user; a second launch shows the first
+├── AppResources.cs              Dashboard + icon embedded in the exe
+├── NativeMethods.cs             Win32 calls (hotkey, overlay, process path)
 ├── AppInfo.cs                   Version, repo URL, User-Agent strings
 ├── AppPaths.cs                  All on-disk paths in one place
 ├── AppSettings.cs               User preferences + SettingsManager
@@ -49,7 +58,10 @@ CornWatch/
 │   ├── SystemMonitor.cs         Background polling engine (builds each snapshot)
 │   ├── HealthEvaluator.cs       Health score + alerts from one table of checks
 │   ├── GpuMonitor.cs            Per-GPU load, VRAM and sensors
-│   ├── HardwareSensors.cs       LibreHardwareMonitor wrapper (GPU/CPU sensors)
+│   ├── HardwareSensors.cs       LibreHardwareMonitor wrapper (GPU/CPU/drive/battery sensors)
+│   ├── DriveHealthMonitor.cs    Physical drive health, wear and temperature
+│   ├── BatteryMonitor.cs        Laptop battery charge, rate and wear
+│   ├── ProcessActions.cs        End / locate / search a process
 │   ├── DxgiAdapters.cs          DXGI adapter enumeration (name, VRAM, LUID)
 │   ├── MemoryInfo.cs            Physical memory via GlobalMemoryStatusEx
 │   ├── NetworkMeter.cs          Throughput on the active network adapter
@@ -60,10 +72,17 @@ CornWatch/
 ├── Models/
 │   └── SystemSnapshot.cs        Data model serialised to JSON
 └── UI/
-    └── Dashboard/
-        ├── MainForm.cs           WinForms host + WebView2 + tray + notifications
-        ├── CornBridge.cs         JS ↔ C# bridge (exports, settings, history)
-        └── Dashboard.html        HTML/CSS/JS dashboard frontend
+    ├── Dashboard/
+    │   ├── MainForm.cs           WinForms host + WebView2 + tray + notifications
+    │   ├── CornBridge.cs         JS ↔ C# bridge (exports, settings, history, process actions)
+    │   └── Dashboard.html        HTML/CSS/JS dashboard frontend
+    ├── Overlay/
+    │   ├── OverlayForm.cs        Click-through in-game overlay
+    │   └── HotkeyWindow.cs       Global Ctrl+Alt+O hotkey
+    └── Tray/
+        ├── TrayStatusIcon.cs     Health-tinted tray icon + tooltip
+        ├── TrayMenuRenderer.cs   Corn Systems-styled tray menu
+        └── TrayColorTable.cs
 ```
 
 Tests live in `CornWatch.Tests/` (xUnit); CI is `.github/workflows/build.yml`.
@@ -89,9 +108,9 @@ System APIs (PerformanceCounter + Win32 + WMI + DXGI)
 - **C# .NET 10 + WinForms** — app host, system polling
 - **PerformanceCounter** — CPU, disk, GPU engine and VRAM live metrics
 - **Win32 / .NET APIs** — RAM (`GlobalMemoryStatusEx`), network (`NetworkInterface`)
-- **WMI (System.Management)** — CPU name, temperature
+- **WMI (System.Management)** — CPU name, temperature, drive health (`MSFT_PhysicalDisk`)
 - **DXGI (P/Invoke)** — GPU name, LUID and true VRAM without the WMI 4GB cap
-- **LibreHardwareMonitorLib** — GPU temperature / fan / power, elevated CPU temperature
+- **LibreHardwareMonitorLib** — GPU temperature / fan / power, battery, elevated CPU temperature and drive SMART
 - **Microsoft.Web.WebView2** — Chromium-based HTML panel
 - **Vanilla HTML/CSS/JS** — dashboard frontend (no frameworks needed)
 
@@ -109,6 +128,8 @@ dotnet run
 > CPU temperature requires running as Administrator (Windows offers no
 > unprivileged source); installing the [PawnIO](https://pawnio.eu/) driver gives
 > accurate per-CPU readings, otherwise the ACPI thermal zone is used.
+> Drive wear and temperature (SMART) also need Administrator; Windows' own
+> drive health verdict works without it.
 > The dashboard shows **N/A** for unavailable sensors rather than zero.
 
 Run the tests with `dotnet test` from the repository root.
@@ -127,6 +148,7 @@ and survive reinstalls. Everything except window size is editable from the
 - All alert thresholds (CPU %, CPU temp, RAM %, disk %, GPU temp, VRAM %)
 - Update check on/off
 - Critical-alert tray notifications on/off
+- Overlay on/off, corner and opacity
 
 Health score history (last 24 hours, one averaged entry per minute) is stored
 alongside settings in `history.json` and persists across restarts.
@@ -147,6 +169,9 @@ ISCC.exe CornWatch.iss
 # → installer_output\CornWatch-Setup-<version>.exe
 ```
 
+The published `CornWatch.exe` is also the portable build: the dashboard and
+icon are embedded, so it runs on its own from any folder.
+
 ---
 
 ## Planned Features
@@ -155,6 +180,10 @@ ISCC.exe CornWatch.iss
 - [x] Configurable alert thresholds in the UI (settings panel)
 - [x] Tray balloon notifications on critical alerts
 - [x] Multi-GPU view
+- [x] Drive health and battery panels
+- [x] In-game overlay
+- [ ] CornTools hub integration (live health score in the hub)
+- [ ] Accurate CPU % on 64+ thread machines ("Processor Information" counters)
 - [ ] Dark / light theme toggle
 
 ---

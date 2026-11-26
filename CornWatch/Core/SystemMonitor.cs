@@ -21,6 +21,8 @@ public sealed class SystemMonitor : IDisposable
     private readonly List<PerformanceCounter> _cpuCores = [];
     private readonly HardwareSensors _sensors = new();
     private readonly GpuMonitor _gpus;
+    private readonly DriveHealthMonitor _drives;
+    private readonly BatteryMonitor _battery;
     private readonly ProcessWatchdog _watchdog = new();
     private readonly NetworkMeter _network = new();
 
@@ -34,6 +36,8 @@ public sealed class SystemMonitor : IDisposable
     public SystemMonitor(int intervalMs)
     {
         _gpus = new GpuMonitor(_sensors);
+        _drives = new DriveHealthMonitor(_sensors);
+        _battery = new BatteryMonitor(_sensors);
         _cpuTotal = Counter("Processor", "% Processor Time", "_Total", "MONITOR_CPU_INIT");
         try
         {
@@ -128,6 +132,8 @@ public sealed class SystemMonitor : IDisposable
             snap.ActiveAdapterName = _network.AdapterName;
         });
         EnrichDisks(snap);
+        Guarded("MONITOR_DRIVE_HEALTH", () => snap.PhysicalDisks = _drives.Read());
+        Guarded("MONITOR_BATTERY", () => snap.Battery = _battery.Read());
         Guarded("MONITOR_GPU", () => snap.Gpus = _gpus.Read());
         Guarded("MONITOR_PROCS", () => snap.Processes = _watchdog.Read());
 

@@ -51,4 +51,26 @@ public class AppSettingsTests
         Assert.Equal(150f, settings.CpuCritTempC);
         Assert.Equal(150f, settings.CpuWarnTempC);
     }
+
+    [Theory]
+    [InlineData(5, 30)]
+    [InlineData(85, 85)]
+    [InlineData(250, 100)]
+    public void OverlayOpacityIsClamped(int input, int expected)
+    {
+        var settings = new AppSettings { OverlayOpacityPercent = input };
+        settings.Normalize();
+        Assert.Equal(expected, settings.OverlayOpacityPercent);
+    }
+
+    [Theory]
+    [InlineData("bottomleft", "BottomLeft")]
+    [InlineData("TopRight", "TopRight")]
+    [InlineData("middle", "TopRight")]
+    public void OverlayCornerIsNormalised(string input, string expected)
+    {
+        var settings = new AppSettings { OverlayCorner = input };
+        settings.Normalize();
+        Assert.Equal(expected, settings.OverlayCorner);
+    }
 }

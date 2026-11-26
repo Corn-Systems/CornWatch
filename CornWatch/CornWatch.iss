@@ -21,7 +21,7 @@
 #define MyAppExeName   "CornWatch.exe"
 #define PublishDir     "bin\Release\net10.0-windows\win-x64\publish"
 #define FullVersion    GetVersionNumbersString(PublishDir + "\" + MyAppExeName)
-; Drop the fourth (always 0) part: 0.3.0.0 -> 0.3.0
+; Drop the fourth (always 0) part: 0.4.0.0 -> 0.4.0
 #define MyAppVersion   Copy(FullVersion, 1, RPos(".", FullVersion) - 1)
 
 [Setup]
@@ -74,8 +74,9 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Additional shortcuts:"
 
 [Files]
-; Single self-contained exe + any sidecar files in the publish folder
-Source: "{#PublishDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; Single self-contained exe — the dashboard and icon are embedded in it (0.4.0+), so nothing
+; else from the publish folder is needed (and stale files left there by older publishes stay out).
+Source: "{#PublishDir}\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 #ifexist "..\LICENSE"
 Source: "..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
 #endif
@@ -122,6 +123,11 @@ begin
   ExtractTemporaryFile('MicrosoftEdgeWebView2Setup.exe');
 end;
 #endif
+
+[InstallDelete]
+; Upgrading from 0.3.0 and earlier: these used to sit next to the exe and are now embedded in it.
+Type: filesandordirs; Name: "{app}\UI"
+Type: filesandordirs; Name: "{app}\assets"
 
 [UninstallDelete]
 ; Leave %AppData%\CornSystems\CornWatch alone (settings, logs, history —

@@ -107,6 +107,34 @@
   .proc-table td { padding:3px 8px 3px 0; border-top:1px solid var(--border); }
   .proc-bar { display:inline-block; height:4px; border-radius:2px; background:var(--green); vertical-align:middle; transition:width .4s; }
 
+  .proc-table tbody tr { cursor:pointer; }
+  .proc-table tbody tr:hover td { background:var(--bg3); }
+
+  /* ── Process row menu ── */
+  .ctx-menu { position:fixed; z-index:20; width:230px; background:var(--bg2); border:1px solid var(--border2); border-radius:8px;
+              padding:4px; box-shadow:0 10px 28px rgba(0,0,0,.55); display:flex; flex-direction:column; }
+  .ctx-menu[hidden] { display:none; }
+  .ctx-menu button { text-align:left; background:none; border:0; color:var(--text); font-family:inherit; font-size:11px;
+                     padding:7px 10px; border-radius:5px; cursor:pointer; }
+  .ctx-menu button:hover { background:var(--bg3); color:var(--accent); }
+  .ctx-menu button.danger { color:var(--red); }
+  .ctx-menu button.danger.confirm { background:rgba(239,68,68,.15); }
+  .ctx-title { font-size:10px; color:var(--muted); padding:6px 10px 4px; letter-spacing:.06em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .ctx-sep { height:1px; background:var(--border); margin:3px 6px; }
+  .ctx-msg { font-size:10px; line-height:1.5; color:var(--amber); padding:4px 10px 6px; }
+  .ctx-msg:empty { display:none; }
+
+  /* ── Drive health ── */
+  .drive-row { display:flex; flex-direction:column; gap:1px; font-size:11px; }
+  .drive-head { display:flex; justify-content:space-between; gap:8px; }
+  .drive-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .drive-meta { font-size:9px; color:var(--muted); }
+  .kind-badge { font-size:8px; letter-spacing:.08em; color:var(--dim); border:1px solid var(--border2); border-radius:3px; padding:0 3px; margin-right:4px; }
+
+  /* ── Battery ── */
+  #battery-wrap { border-top:1px solid var(--border); padding-top:8px; display:flex; flex-direction:column; gap:5px; }
+  #battery-wrap[hidden] { display:none; }
+
   /* ── 24h health history ── */
   #history-wrap { border-top:1px solid var(--border); padding-top:8px; display:flex; flex-direction:column; gap:4px; }
   #history-svg { width:100%; height:44px; }
@@ -122,6 +150,7 @@
   .set-row.single { grid-template-columns:1fr 164px; }
   .set-row input[type=number] { width:100%; background:var(--bg); border:1px solid var(--border2); border-radius:6px; color:var(--text); font-family:inherit; font-size:11px; padding:5px 6px; }
   .set-row input[type=checkbox] { justify-self:end; width:15px; height:15px; accent-color:var(--accent); }
+  .set-row select { width:100%; background:var(--bg); border:1px solid var(--border2); border-radius:6px; color:var(--text); font-family:inherit; font-size:11px; padding:5px 6px; }
   .set-head { color:var(--muted); font-size:9px; letter-spacing:.1em; text-transform:uppercase; }
   #settings-error { color:var(--red); font-size:11px; min-height:14px; }
 
@@ -246,6 +275,12 @@
       <div class="alert-list" id="alert-list">
         <div class="no-alerts">All systems nominal</div>
       </div>
+      <div id="battery-wrap" hidden>
+        <span class="card-label">Battery</span>
+        <div class="disk-header"><span id="bat-state">—</span><span id="bat-pct" style="font-weight:bold">—</span></div>
+        <div class="disk-bar-wrap"><div class="disk-bar" id="bat-bar" style="width:0%"></div></div>
+        <div class="card-sub" id="bat-detail" style="font-size:10px"></div>
+      </div>
       <div id="history-wrap">
         <span class="card-label">Health · last 24h</span>
         <svg id="history-svg" viewBox="0 0 240 44" preserveAspectRatio="none"></svg>
@@ -290,6 +325,10 @@
             R: <span id="disk-read">0</span> MB/s &nbsp; W: <span id="disk-write">0</span> MB/s
           </div>
           <div id="disk-bars" style="display:flex;flex-direction:column;gap:8px;margin-top:10px"></div>
+          <div id="drive-health-wrap" style="margin-top:14px" hidden>
+            <span class="card-label">Drive Health</span>
+            <div id="drive-health" style="display:flex;flex-direction:column;gap:7px;margin-top:6px"></div>
+          </div>
         </div>
 
         <div style="flex:1.2;min-width:250px;overflow:hidden;display:flex;flex-direction:column">
@@ -297,7 +336,7 @@
           <div style="flex:1;overflow-y:auto;margin-top:6px">
             <table class="proc-table">
               <thead>
-                <tr>
+                <tr title="Click a process for actions">
                   <th>Process</th>
                   <th style="width:92px">CPU</th>
                   <th style="width:70px">Mem</th>
@@ -315,6 +354,8 @@
 
   </div>
 </div>
+
+<div id="proc-menu" class="ctx-menu" hidden></div>
 
 <div id="settings-overlay" onclick="if (event.target === this) closeSettings()">
   <div id="settings-panel">
@@ -553,6 +594,9 @@ window.cornWatch = {
         </div>`;
     }).join('');
 
+    renderDriveHealth(snap.physicalDisks || []);
+    renderBattery(snap.battery);
+
     // CPU core heatmap
     const heatmap = document.getElementById('cpu-heatmap');
     const cores = snap.cpuCoreUsages || [];
@@ -582,6 +626,129 @@ window.cornWatch = {
           </div>`).join('');
   }
 };
+
+// ── Drive health ─────────────────────────────────────────────────────────────
+const HEALTH = {
+  healthy:   ['Healthy',   COLORS.green],
+  warning:   ['Warning',   COLORS.amber],
+  unhealthy: ['Failing',   COLORS.red],
+  unknown:   ['Unknown',   'var(--muted)'],
+};
+function fmtSize(bytes) {
+  if (!(bytes > 0)) return '';
+  const tb = bytes / 1e12;
+  return tb >= 1 ? `${tb.toFixed(tb >= 10 ? 0 : 1)} TB` : `${Math.round(bytes / 1e9)} GB`;
+}
+function renderDriveHealth(drives) {
+  const wrap = document.getElementById('drive-health-wrap');
+  wrap.hidden = drives.length === 0;
+  if (!drives.length) return;
+  // Safe: drive names go through esc(); everything else is numbers or constants.
+  document.getElementById('drive-health').innerHTML = drives.map(d => {
+    const [label, color] = HEALTH[String(d.health).toLowerCase()] || HEALTH.unknown;
+    const meta = [fmtSize(d.sizeBytes)];
+    if (d.temperatureCelsius != null) meta.push(`<span style="color:${tempColor(d.temperatureCelsius)}">${d.temperatureCelsius.toFixed(0)}°C</span>`);
+    if (d.wearPercent != null) meta.push(`<span style="color:${d.wearPercent >= 90 ? COLORS.red : d.wearPercent >= 70 ? COLORS.amber : 'inherit'}">${d.wearPercent.toFixed(0)}% worn</span>`);
+    if (d.isRemovable) meta.push('removable');
+    return `<div class="drive-row">
+        <div class="drive-head">
+          <span class="drive-name" title="${esc(d.name)}"><span class="kind-badge">${esc(d.kind)}</span>${esc(d.name)}</span>
+          <span style="color:${color};white-space:nowrap">${label}</span>
+        </div>
+        <div class="drive-meta">${meta.filter(Boolean).join(' · ')}</div>
+      </div>`;
+  }).join('') + (drives.some(d => d.wearPercent != null) ? '' :
+      '<div class="drive-meta">Wear &amp; temperature: run CornWatch as admin</div>');
+}
+
+// ── Battery ──────────────────────────────────────────────────────────────────
+function fmtDuration(sec) {
+  const h = Math.floor(sec / 3600), m = Math.round(sec % 3600 / 60);
+  return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+function renderBattery(b) {
+  const wrap = document.getElementById('battery-wrap');
+  wrap.hidden = !b;
+  if (!b) return;
+  const pct = Math.round(b.chargePercent);
+  const low = !b.onAcPower && pct <= 10, warn = !b.onAcPower && pct <= 25;
+  const color = low ? COLORS.red : warn ? COLORS.amber : COLORS.green;
+  const state = b.isCharging ? 'Charging' : b.onAcPower ? 'Plugged in' : 'On battery';
+  document.getElementById('bat-state').textContent = state;
+  const pctEl = document.getElementById('bat-pct');
+  pctEl.textContent = pct + '%';
+  pctEl.style.color = color;
+  const bar = document.getElementById('bat-bar');
+  bar.style.width = pct + '%';
+  bar.style.background = color;
+
+  const parts = [];
+  if (b.rateWatts != null) parts.push(`${b.isCharging ? '+' : b.onAcPower ? '' : '−'}${b.rateWatts.toFixed(1)} W`);
+  if (b.remainingSeconds > 0) parts.push(`${fmtDuration(b.remainingSeconds)} left`);
+  if (b.wearPercent != null) parts.push(`${b.wearPercent.toFixed(0)}% wear`);
+  if (b.fullChargeCapacityWh != null && b.designedCapacityWh != null)
+    parts.push(`${b.fullChargeCapacityWh.toFixed(0)}/${b.designedCapacityWh.toFixed(0)} Wh`);
+  document.getElementById('bat-detail').textContent = parts.join(' · ') || '—';
+}
+
+// ── Process row menu ─────────────────────────────────────────────────────────
+// Click (or right-click) a row: end it / all instances, open its folder, or search for it.
+let lastProcs = [];
+const procMenu = document.getElementById('proc-menu');
+
+function closeProcMenu() { procMenu.hidden = true; procMenu.innerHTML = ''; }
+
+async function openProcMenu(p, x, y) {
+  let isProtected = false;
+  try { isProtected = await host().IsProcessProtected(p.name); } catch(e) { /* outside CornWatch */ }
+  const many = p.instanceCount > 1;
+  // Safe: the name goes through esc(); data-act values are constants.
+  procMenu.innerHTML = `
+    <div class="ctx-title" title="${esc(p.name)}">${esc(p.name)} · PID ${Number(p.pid)}${many ? ` · ${Number(p.instanceCount)} running` : ''}</div>
+    <div class="ctx-sep"></div>
+    ${isProtected ? '<div class="ctx-msg" style="color:var(--muted)">Windows system process — CornWatch won\'t end it.</div>' : `
+      <button class="danger" data-act="kill">End process</button>
+      ${many ? `<button class="danger" data-act="killall">End all ${Number(p.instanceCount)}</button>` : ''}
+      <div class="ctx-sep"></div>`}
+    <button data-act="open">Open file location</button>
+    <button data-act="search">Search online</button>
+    <div class="ctx-msg" id="proc-msg"></div>`;
+  procMenu.hidden = false;
+  const r = procMenu.getBoundingClientRect();
+  procMenu.style.left = Math.max(4, Math.min(x, innerWidth - r.width - 4)) + 'px';
+  procMenu.style.top  = Math.max(4, Math.min(y, innerHeight - r.height - 4)) + 'px';
+
+  procMenu.querySelectorAll('button').forEach(btn => btn.addEventListener('click', async () => {
+    const msg = document.getElementById('proc-msg');
+    const act = btn.dataset.act;
+    // Ending a process loses its unsaved work, so it takes a second click.
+    if ((act === 'kill' || act === 'killall') && !btn.classList.contains('confirm')) {
+      btn.classList.add('confirm');
+      btn.textContent = act === 'kill' ? `Click again to end ${p.name}` : `Click again to end all ${p.instanceCount}`;
+      return;
+    }
+    try {
+      let result = '';
+      if (act === 'kill')    result = await host().KillProcess(p.pid);
+      if (act === 'killall') result = await host().KillProcessGroup(p.name);
+      if (act === 'open')    result = await host().OpenProcessLocation(p.pid);
+      if (act === 'search')  await host().SearchProcessOnline(p.name);
+      if (result) msg.textContent = result; else closeProcMenu();
+    } catch(e) { msg.textContent = 'Unavailable: ' + e; }
+  }));
+}
+
+document.getElementById('proc-tbody').addEventListener('click', onProcRow);
+document.getElementById('proc-tbody').addEventListener('contextmenu', onProcRow);
+function onProcRow(e) {
+  const row = e.target.closest('tr[data-i]');
+  if (!row) return;
+  e.preventDefault();
+  const p = lastProcs[Number(row.dataset.i)];
+  if (p) openProcMenu({ ...p }, e.clientX, e.clientY); // a copy: the table re-renders every tick
+}
+document.addEventListener('mousedown', e => { if (!procMenu.hidden && !procMenu.contains(e.target)) closeProcMenu(); });
+window.addEventListener('blur', closeProcMenu);
 
 // ── C# bridge ────────────────────────────────────────────────────────────────
 // Method names match the C# CornBridge class. Throws when the page is opened outside
@@ -661,6 +828,7 @@ const TOGGLES = [
   ['Start minimized to tray',    'startMinimized'],
   ['Check for updates on start', 'checkForUpdates'],
 ];
+const OVERLAY_CORNERS = [['TopLeft','Top left'], ['TopRight','Top right'], ['BottomLeft','Bottom left'], ['BottomRight','Bottom right']];
 let loadedSettings = null;
 
 function fillSettings(cfg) {
@@ -674,6 +842,14 @@ function fillSettings(cfg) {
         <input type="number" id="set-pollIntervalMs" value="${Number(cfg.pollIntervalMs)}" min="250" max="30000" step="250"></div>
       ${TOGGLES.map(([label, k]) => `<div class="set-row single"><span>${label}</span>
         <input type="checkbox" id="set-${k}" ${cfg[k] ? 'checked' : ''}></div>`).join('')}
+      <div class="set-group">Overlay</div>
+      <div class="set-row single"><span>Show in-game overlay (Ctrl+Alt+O)</span>
+        <input type="checkbox" id="set-overlayEnabled" ${cfg.overlayEnabled ? 'checked' : ''}></div>
+      <div class="set-row single"><span>Corner (main monitor)</span>
+        <select id="set-overlayCorner">${OVERLAY_CORNERS.map(([v, label]) =>
+          `<option value="${v}" ${cfg.overlayCorner === v ? 'selected' : ''}>${label}</option>`).join('')}</select></div>
+      <div class="set-row single"><span>Opacity % (30–100)</span>
+        <input type="number" id="set-overlayOpacityPercent" value="${Number(cfg.overlayOpacityPercent)}" min="30" max="100" step="5"></div>
       <div class="set-group">Alert thresholds</div>
       <div class="set-row set-head"><span></span><span>Warning</span><span>Critical</span></div>
       ${THRESHOLDS.map(([label, w, c]) => `<div class="set-row"><span>${label}</span>${num(w)}${num(c)}</div>`).join('')}
@@ -702,26 +878,31 @@ async function saveSettings() {
     if (cfg[w] > cfg[c]) { err.textContent = `${label}: warning must not exceed critical.`; return; }
   }
   if (!(cfg.pollIntervalMs >= 250 && cfg.pollIntervalMs <= 30000)) { err.textContent = 'Poll interval must be 250–30000 ms.'; return; }
+  cfg.overlayEnabled = document.getElementById('set-overlayEnabled').checked;
+  cfg.overlayCorner = document.getElementById('set-overlayCorner').value;
+  cfg.overlayOpacityPercent = Math.round(read('overlayOpacityPercent'));
+  if (!(cfg.overlayOpacityPercent >= 30 && cfg.overlayOpacityPercent <= 100)) { err.textContent = 'Overlay opacity must be 30–100%.'; return; }
   try {
     await host().SaveSettings(JSON.stringify(cfg));
     closeSettings();
   } catch(e) { err.textContent = 'Could not save: ' + e; }
 }
 
-document.addEventListener('keydown', e => { if (e.key === 'Escape') closeSettings(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeSettings(); closeProcMenu(); } });
 
 function updateProcessTable(procs) {
   const tbody = document.getElementById('proc-tbody');
   if (!tbody) return;
   if (!procs?.length) return; // keep "Sampling..." row until first data
+  lastProcs = procs;
   // esc() on process name — fully user-controlled string.
-  tbody.innerHTML = procs.map(p => {
+  tbody.innerHTML = procs.map((p, i) => {
     const mb   = (p.ramBytes / 1048576).toFixed(0);
     const cpu  = Math.min(100, p.cpuPercent || 0);
     const name = p.instanceCount > 1 ? `${esc(p.name)} (${p.instanceCount})` : esc(p.name);
     const barW = Math.max(2, Math.round(cpu * 0.4));
-    return `<tr>
-      <td style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="PID ${p.pid}">${name}</td>
+    return `<tr data-i="${i}">
+      <td style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="PID ${p.pid} — click for actions">${name}</td>
       <td style="white-space:nowrap">
         <span class="proc-bar" style="width:${barW}px;background:${pctColor(cpu)}"></span>
         <span style="color:${pctColor(cpu)}"> ${cpu.toFixed(1)}%</span>

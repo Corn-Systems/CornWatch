@@ -35,6 +35,13 @@ internal sealed class AppSettings
     public float GpuVramWarnPercent { get; set; } = 85f;
     public float GpuVramCritPercent { get; set; } = 95f;
 
+    // In-game overlay (toggle with Ctrl+Alt+O or the tray menu).
+    public static readonly string[] OverlayCorners = ["TopLeft", "TopRight", "BottomLeft", "BottomRight"];
+    public const int MinOverlayOpacity = 30, MaxOverlayOpacity = 100;
+    public bool OverlayEnabled { get; set; }
+    public string OverlayCorner { get; set; } = "TopRight";
+    public int OverlayOpacityPercent { get; set; } = 85;
+
     public static int ClampPollInterval(int ms) => Math.Clamp(ms, MinPollIntervalMs, MaxPollIntervalMs);
 
     // Forces every value into a sane range so a hand-edited file or bad UI input can't break alerting.
@@ -47,6 +54,8 @@ internal sealed class AppSettings
         (GpuVramWarnPercent, GpuVramCritPercent) = Pair(GpuVramWarnPercent, GpuVramCritPercent, 100f);
         (CpuWarnTempC, CpuCritTempC) = Pair(CpuWarnTempC, CpuCritTempC, 150f);
         (GpuWarnTempC, GpuCritTempC) = Pair(GpuWarnTempC, GpuCritTempC, 150f);
+        OverlayOpacityPercent = Math.Clamp(OverlayOpacityPercent, MinOverlayOpacity, MaxOverlayOpacity);
+        OverlayCorner = OverlayCorners.FirstOrDefault(c => c.Equals(OverlayCorner, StringComparison.OrdinalIgnoreCase)) ?? "TopRight";
     }
 
     private static (float warn, float crit) Pair(float warn, float crit, float max)

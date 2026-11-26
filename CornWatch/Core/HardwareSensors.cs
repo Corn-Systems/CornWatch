@@ -4,12 +4,21 @@ namespace CornWatch.Core;
 
 internal readonly record struct GpuSensorReading(float? TemperatureCelsius, float? FanRpm, float? PowerWatts);
 
+// LifePercent is the drive's remaining rated life (100 = new), from NVMe "Percentage Used" or the SSD's SMART life attribute.
+internal readonly record struct StorageSensorReading(string Name, float? TemperatureCelsius, float? LifePercent);
+
+internal readonly record struct BatterySensorReading(
+    float? ChargePercent, float? DegradationPercent, float? RateWatts,
+    float? DesignedCapacityMWh, float? FullChargeCapacityMWh, float? RemainingSeconds);
+
 /// <summary>
 /// Vendor sensor access through LibreHardwareMonitor.
 /// GPU temperature / fan / power come from the vendor's user-mode API (AMD ADL,
-/// NVIDIA NVAPI, Intel) and need no elevation. CPU temperature needs a kernel
-/// driver, so the CPU is only opened when running elevated; if nothing is
-/// reported the caller falls back to the ACPI thermal zone.
+/// NVIDIA NVAPI, Intel) and need no elevation; neither does the battery. CPU temperature
+/// needs a kernel driver and drive SMART data needs raw disk access, so the CPU and
+/// storage are only opened when running elevated. If the CPU reports nothing the
+/// caller falls back to the ACPI thermal zone; drive health falls back to Windows'
+/// own health status (DriveHealthMonitor).
 /// </summary>
 internal sealed class HardwareSensors : IDisposable
 {
@@ -17,19 +26,28 @@ internal sealed class HardwareSensors : IDisposable
 
     private readonly Computer? _computer;
     private readonly List<IHardware> _gpus = [];
-    private readonly IHardware? _cpu;
+    private readonly List<IHardware> _storage = [];
+    private readonly IHardware? _cpu, _battery;
     private bool _disposed;
 
     public HardwareSensors()
     {
         try
         {
-            _computer = new Computer { IsGpuEnabled = true, IsCpuEnabled = AppInfo.IsElevated };
+            _computer = new Computer
+            {
+                IsGpuEnabled = true,
+                IsBatteryEnabled = true,
+                IsCpuEnabled = AppInfo.IsElevated,
+                IsStorageEnabled = AppInfo.IsElevated,
+            };
             _computer.Open();
             foreach (var hardware in _computer.Hardware)
             {
                 if (hardware.HardwareType is HardwareType.GpuAmd or HardwareType.GpuNvidia or HardwareType.GpuIntel) _gpus.Add(hardware);
                 else if (hardware.HardwareType == HardwareType.Cpu) _cpu ??= hardware;
+                else if (hardware.HardwareType == HardwareType.Storage) _storage.Add(hardware);
+                else if (hardware.HardwareType == HardwareType.Battery) _battery ??= hardware;
             }
         }
         catch (Exception ex)
@@ -45,6 +63,40 @@ internal sealed class HardwareSensors : IDisposable
         if (_disposed) return;
         foreach (var hardware in _gpus) Refresh(hardware);
         if (_cpu is not null) Refresh(_cpu);
+        if (_battery is not null) Refresh(_battery);
+    }
+
+    // SMART reads are slow, so drives are refreshed on their own, slower schedule.
+    public IReadOnlyList<StorageSensorReading> ReadStorage()
+    {
+        if (_disposed || _storage.Count == 0) return [];
+        var readings = new List<StorageSensorReading>();
+        foreach (var drive in _storage)
+        {
+            Refresh(drive);
+            var life = drive.Sensors.FirstOrDefault(s => s.SensorType == SensorType.Level && s.Value is not null
+                && s.Name.Contains("Life", IgnoreCase))?.Value;
+            readings.Add(new StorageSensorReading(drive.Name,
+                Pick(drive, SensorType.Temperature, "Composite Temperature", "Temperature"),
+                life is { } l ? Math.Clamp(l, 0f, 100f) : null));
+        }
+        return readings;
+    }
+
+    public BatterySensorReading? ReadBattery()
+    {
+        if (_disposed || _battery is not { } b) return null;
+        float? Named(SensorType type, string name) =>
+            b.Sensors.FirstOrDefault(s => s.SensorType == type && s.Name.Equals(name, IgnoreCase))?.Value;
+        var rate = Named(SensorType.Power, "Charge/Discharge Rate") ?? Named(SensorType.Power, "Charge Rate")
+                   ?? Named(SensorType.Power, "Discharge Rate");
+        return new BatterySensorReading(
+            Named(SensorType.Level, "Charge Level"),
+            Named(SensorType.Level, "Degradation Level"),
+            rate is { } r ? Math.Abs(r) : null,
+            Named(SensorType.Energy, "Designed Capacity"),
+            Named(SensorType.Energy, "Fully-Charged Capacity"),
+            Named(SensorType.TimeSpan, "Remaining Time (Estimated)"));
     }
 
     // DXGI adapter names in display order → the sensor device for each (null when none matches).
@@ -79,11 +131,12 @@ internal sealed class HardwareSensors : IDisposable
     {
         if (_computer is null) return "Sensors: unavailable (see log)";
         var lines = new List<string> { $"Sensors (LibreHardwareMonitor, elevated={AppInfo.IsElevated}):" };
-        foreach (var hardware in _gpus.Concat(_cpu is null ? [] : new[] { _cpu }))
+        IEnumerable<IHardware> all = [.. _gpus, .. _cpu is null ? [] : new[] { _cpu }, .. _storage, .. _battery is null ? [] : new[] { _battery }];
+        foreach (var hardware in all)
         {
             lines.Add($"  {hardware.Name}");
             lines.AddRange(hardware.Sensors
-                .Where(s => s.SensorType is SensorType.Temperature or SensorType.Fan or SensorType.Power)
+                .Where(s => s.SensorType is SensorType.Temperature or SensorType.Fan or SensorType.Power or SensorType.Level or SensorType.Energy)
                 .Select(s => $"    {s.SensorType} / {s.Name} = {s.Value?.ToString("0.#") ?? "n/a"}"));
         }
         return string.Join("\n", lines);

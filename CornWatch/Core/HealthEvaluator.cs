@@ -6,10 +6,19 @@ namespace CornWatch.Core;
 // so anything that costs score is also explained in the alert list.
 internal static class HealthEvaluator
 {
+    internal const int DriveFailingPoints = 25, DriveWarningPoints = 10, DriveWornPoints = 5, BatteryLowPoints = 5;
+    internal const float DriveWornPercent = 90f, BatteryLowPercent = 10f, BatteryWornPercent = 40f;
+
     public static void Evaluate(SystemSnapshot s, AppSettings c)
     {
         var score = 100;
         var alerts = new List<HealthAlert>();
+
+        void Add(string id, string category, AlertSeverity severity, int points, string message)
+        {
+            score -= points;
+            alerts.Add(new HealthAlert { Id = id, Category = category, Severity = severity, Message = message });
+        }
 
         void Check(string id, string category, float value, float warn, float crit,
             int warnPoints, int critPoints, string warnMessage, string critMessage)
@@ -39,6 +48,25 @@ internal static class HealthEvaluator
         foreach (var d in s.Disks.Where(d => !d.IsRemovable))
             Check("disk." + d.DriveLetter, "Disk", d.UsagePercent, c.DiskWarnPercent, c.DiskCritPercent, 8, 15,
                 $"{d.DriveLetter} is {d.UsagePercent:0}% full", $"{d.DriveLetter} is {d.UsagePercent:0}% full — almost out of space");
+
+        foreach (var d in s.PhysicalDisks.Where(d => !d.IsRemovable))
+        {
+            if (d.Health == DriveHealth.Unhealthy) Add($"drive.{d.Name}.health", "Drive", AlertSeverity.Critical, DriveFailingPoints,
+                $"{d.Name} is reported as failing — back up your files now");
+            else if (d.Health == DriveHealth.Warning) Add($"drive.{d.Name}.health", "Drive", AlertSeverity.Warning, DriveWarningPoints,
+                $"{d.Name} reports a health warning — back up soon");
+            if (d.WearPercent is >= DriveWornPercent and var wear) Add($"drive.{d.Name}.wear", "Drive", AlertSeverity.Warning, DriveWornPoints,
+                $"{d.Name} has used {wear:0}% of its rated life");
+        }
+
+        if (s.Battery is { } b)
+        {
+            if (!b.OnAcPower && b.ChargePercent <= BatteryLowPercent) Add("battery.low", "Battery", AlertSeverity.Warning, BatteryLowPoints,
+                $"Battery at {b.ChargePercent:0}% — plug in soon");
+            // Informational only: a worn battery is worth knowing about but isn't a system problem.
+            if (b.WearPercent is >= BatteryWornPercent and var wear) Add("battery.wear", "Battery", AlertSeverity.Info, 0,
+                $"Battery has lost {wear:0}% of its original capacity");
+        }
 
         for (var i = 0; i < s.Gpus.Count; i++)
         {

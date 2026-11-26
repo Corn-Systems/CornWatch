@@ -26,7 +26,7 @@
 
     <!-- Single source of truth for the version.  AppInfo.cs reads it via
          AssemblyInformationalVersionAttribute; never hardcode elsewhere. -->
-    <Version>0.3.0</Version>
+    <Version>0.4.0</Version>
     <Company>Corn Systems</Company>
     <Authors>Corn Systems</Authors>
     <Product>CornWatch</Product>
@@ -51,17 +51,12 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Folder on disk is lowercase "assets" — casing must match exactly
+    <!-- Embedded in the exe (read by AppResources.cs), so both the portable build and the
+         installed app are a single CornWatch.exe with nothing loose next to it.
+         Folder on disk is lowercase "assets" — casing must match exactly
          or case-sensitive build environments (Linux CI) fail to find these. -->
-    <Content Include="assets\cornwatch.ico">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
-    </Content>
-    <Content Include="assets\cornwatch.png">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
-    </Content>
-    <Content Include="UI\Dashboard\Dashboard.html">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
-    </Content>
+    <EmbeddedResource Include="assets\cornwatch.ico" LogicalName="CornWatch.cornwatch.ico" />
+    <EmbeddedResource Include="UI\Dashboard\Dashboard.html" LogicalName="CornWatch.Dashboard.html" />
   </ItemGroup>
 
   <ItemGroup>

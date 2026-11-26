@@ -14,6 +14,11 @@ internal static class AppPaths
     public static string WebViewDataDir { get; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CornSystems", AppInfo.Name, "WebView2");
 
+    // The dashboard page is embedded in the exe (so the portable build is one file) and written
+    // here for WebView2 to load.
+    public static string DashboardFile { get; } = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CornSystems", AppInfo.Name, "UI", "Dashboard.html");
+
     private static string SnapshotsDir { get; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), AppInfo.Name, "Snapshots");
 
