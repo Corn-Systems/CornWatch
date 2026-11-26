@@ -8,6 +8,7 @@ internal sealed class AppSettings
 {
     public const int MinPollIntervalMs = 250, MaxPollIntervalMs = 30_000;
 
+    // Window size in 96-DPI pixels (MainForm scales it for the monitor's DPI).
     public int WindowWidth { get; set; } = 1280;
     public int WindowHeight { get; set; } = 800;
     public string WindowState { get; set; } = "Normal";   // "Normal" | "Maximized"

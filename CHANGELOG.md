@@ -3,6 +3,29 @@
 All notable changes to CornWatch are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- **DPI:** the app is now fully per-monitor DPI aware (PerMonitorV2).
+  - Added `app.manifest` (PerMonitorV2, Common Controls v6, Windows 10/11 `supportedOS`). The csproj comment said one existed, but it didn't.
+  - Added the shared `CornSystems.Dpi` helper (`Dpi.cs`). `MainForm` uses `AutoScaleMode.None`, scales its minimum size with `Dpi.S()`, and handles `DpiChanged` when the window moves between monitors. The old minimum is cleared first so the window can shrink on a lower-scale monitor.
+  - Window size is saved in 96-DPI pixels, so it reopens at the same apparent size on any monitor. It is also clamped to the screen, so sizes saved by 0.3.0 (physical pixels) can't open off-screen.
+  - If the window is created on a monitor whose scale differs from the primary's, it is re-sized for that monitor before it is first shown.
+  - `cornwatch.ico` held only a 16×16 image, so the title bar, taskbar, Alt-Tab and tray icons were upscaled and blurry above 100%. It now has 16–256 px frames. The original hand-drawn 16 px frame is kept. The window and tray icons are loaded at the size they're drawn at.
+  - The network chart canvas was drawn at 96 DPI and stretched. It now renders at `devicePixelRatio` and redraws when the ratio changes.
+  - The "already running" message box appeared before DPI and visual styles were initialised, so it was blurry and old-styled. `ApplicationConfiguration.Initialize()` now runs first.
+  - The WebView2-missing fallback text now rescales on DPI change.
+- **Crash on launch** when a second, non-elevated copy started while an elevated ("Run as administrator") copy was running. Opening the single-instance mutex threw `UnauthorizedAccessException` before any handler was installed.
+- The single-instance mutex was `Global\`, so on a PC with several Windows users, a second user was told CornWatch was "already running — check the tray". The icon was only in the other user's session. It is now per session (`Local\`).
+- **GPU load over-reported** on GPUs with more than one 3D/Compute engine, because load was summed across engines. It is now the busiest engine's load, as in Task Manager.
+- A full USB stick or SD card cost up to 15 health points and raised a critical "almost out of space" alert. Removable drives are still shown but no longer scored.
+- The health badge's dot stayed green at any score. It now follows the score colour.
+- Unplugging or losing the only GPU left its last readings frozen on screen.
+- CPU temperature could show a stale reading when the sensor returned nothing.
+- A burst of critical alerts could exceed the shell's 255-character limit for tray balloons. The text is now truncated.
+- The dashboard no longer re-renders every tick while hidden in the tray. Reopening the window still shows fresh data straight away.
+
 ## [0.3.0] — 2026-11-14
 
 Built and smoke-tested on Windows 11 (dashboard, settings dialog, hidden tray start, exports of live data).

@@ -12,7 +12,9 @@
     <LangVersion>latest</LangVersion>
     <Optimize>true</Optimize>
 
-    <!-- DPI awareness declared in app.manifest; belt-and-suspenders in Program.cs -->
+    <!-- DPI awareness declared in app.manifest; belt-and-suspenders via ApplicationHighDpiMode,
+         which ApplicationConfiguration.Initialize() applies in Program.cs. -->
+    <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <ApplicationIcon>assets\cornwatch.ico</ApplicationIcon>
     <!-- WFO0003: WinForms obsolete API used internally by WebView2 WinForms wrapper.

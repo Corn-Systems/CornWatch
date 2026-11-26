@@ -61,6 +61,8 @@ public class DiskInfo
     public long FreeBytes { get; set; }
     public float UsagePercent => TotalBytes > 0 ? (float)(TotalBytes - FreeBytes) / TotalBytes * 100f : 0f;
     public string DriveFormat { get; set; } = string.Empty;
+    /// <summary>USB sticks, SD cards: shown on the dashboard but not scored — a full flash drive isn't a system problem.</summary>
+    public bool IsRemovable { get; set; }
 }
 
 public class HealthAlert

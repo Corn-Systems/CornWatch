@@ -203,6 +203,7 @@ public sealed class SystemMonitor : IDisposable
                     TotalBytes = drive.TotalSize,
                     FreeBytes = drive.TotalFreeSpace,
                     DriveFormat = drive.DriveFormat,
+                    IsRemovable = drive.DriveType == DriveType.Removable,
                 });
             }
             catch (Exception ex) { SessionLog.Write($"[MONITOR] drive {drive.Name}", ex); }

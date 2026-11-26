@@ -42,6 +42,8 @@ CornWatch/
 ├── SessionLog.cs                Persistent daily log
 ├── UpdateChecker.cs             GitHub Releases version check
 ├── Theme.cs                     Corn Systems colours for the WinForms shell
+├── Dpi.cs                       Shared Corn Systems PerMonitorV2 DPI helper
+├── app.manifest                 PerMonitorV2 DPI awareness, Common Controls v6
 ├── HealthHistory.cs             Rolling 24-hour health score history (per minute)
 ├── Core/
 │   ├── SystemMonitor.cs         Background polling engine (builds each snapshot)
@@ -120,7 +122,7 @@ and survive reinstalls. Everything except window size is editable from the
 **Settings** button in the dashboard:
 
 - Poll interval (default 1 s, slows to 5 s in tray)
-- Window size and state
+- Window size (stored in 96-DPI pixels, so it is the same on any monitor) and state
 - Start minimized to tray
 - All alert thresholds (CPU %, CPU temp, RAM %, disk %, GPU temp, VRAM %)
 - Update check on/off

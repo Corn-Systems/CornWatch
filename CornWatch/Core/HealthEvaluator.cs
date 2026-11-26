@@ -36,7 +36,7 @@ internal static class HealthEvaluator
         Check("ram.usage", "RAM", s.RamUsagePercent, c.RamWarnPercent, c.RamCritPercent, 10, 20,
             $"RAM at {s.RamUsagePercent:0}%", $"RAM at {s.RamUsagePercent:0}% — close some apps");
 
-        foreach (var d in s.Disks)
+        foreach (var d in s.Disks.Where(d => !d.IsRemovable))
             Check("disk." + d.DriveLetter, "Disk", d.UsagePercent, c.DiskWarnPercent, c.DiskCritPercent, 8, 15,
                 $"{d.DriveLetter} is {d.UsagePercent:0}% full", $"{d.DriveLetter} is {d.UsagePercent:0}% full — almost out of space");
 

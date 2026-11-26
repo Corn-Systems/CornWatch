@@ -25,4 +25,18 @@ public class GpuNamingTests
     [InlineData("luid_0x0000", null)]
     public void LuidTagIsExtractedFromInstanceNames(string instance, string? expected) =>
         Assert.Equal(expected, GpuMonitor.LuidTagOf(instance));
+
+    [Theory]
+    [InlineData("pid_10284_luid_0x00000000_0x00014A30_phys_0_eng_0_engtype_3D", "luid_0x00000000_0x00014A30_phys_0_eng_0")]
+    [InlineData("pid_77_luid_0x00000000_0x00014A30_phys_0_eng_12_engtype_Compute", "luid_0x00000000_0x00014A30_phys_0_eng_12")]
+    [InlineData("pid_1_engtype_3D", null)]
+    [InlineData("luid_0x00000000_0x00014A30_phys_0", null)]
+    public void EngineKeyIdentifiesThePhysicalEngine(string instance, string? expected) =>
+        Assert.Equal(expected, GpuMonitor.EngineKeyOf(instance));
+
+    [Fact]
+    public void ProcessesOnTheSameEngineShareAKey() =>
+        Assert.Equal(
+            GpuMonitor.EngineKeyOf("pid_1_luid_0x00000000_0x00014A30_phys_0_eng_0_engtype_3D"),
+            GpuMonitor.EngineKeyOf("pid_2_luid_0x00000000_0x00014A30_phys_0_eng_0_engtype_3D"));
 }

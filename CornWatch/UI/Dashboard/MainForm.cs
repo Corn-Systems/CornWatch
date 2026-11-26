@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
+using CornSystems;
 using CornWatch.Core;
 using CornWatch.Models;
 
@@ -9,7 +10,11 @@ namespace CornWatch.UI.Dashboard;
 public class MainForm : Form
 {
     private const int TrayPollIntervalMs = 5000;
+    private const int BalloonMaxChars = 250;             // Shell limit is 255 including the terminator
+    private const float FallbackFontPx = 40f / 3f;       // 10 pt at 96 DPI, scaled by hand (AutoScaleMode.None)
     private static readonly TimeSpan _alertCooldown = TimeSpan.FromMinutes(5);
+    // 96-DPI ("logical") pixels; scaled with Dpi.S() for the monitor the window is on.
+    private static readonly Size _minLogicalSize = new(960, 640);
 
     private readonly SystemMonitor _monitor;
     private readonly AppSettings _settings = SettingsManager.Current;
@@ -21,28 +26,37 @@ public class MainForm : Form
     private HashSet<string> _activeCritical = [];
 
     private WebView2? _webView;
+    private Label? _fallbackLabel;
     private Action? _balloonAction;
     private FormWindowState _restoreState = FormWindowState.Normal;
-    private volatile bool _webViewReady;
-    private bool _startHidden, _inTray, _trayHintShown, _webViewStarted;
+    private volatile bool _webViewReady, _inTray; // read on the poll thread
+    private bool _startHidden, _trayHintShown, _webViewStarted;
 
     internal SystemSnapshot? LastSnapshot { get; private set; }
 
     public MainForm(bool startMinimized = false)
     {
+        Dpi.Update(this);
+        AutoScaleMode = AutoScaleMode.None; // every pixel value goes through Dpi.S(); never let WinForms double-scale
         Text = "🌽 CornWatch — System Health Dashboard";
-        MinimumSize = new Size(960, 640);
         StartPosition = FormStartPosition.CenterScreen;
         BackColor = Theme.Bg;
-        Size = new Size(_settings.WindowWidth, _settings.WindowHeight);
+        ApplyWindowSize();
         if (_settings.WindowState == "Maximized") WindowState = _restoreState = FormWindowState.Maximized;
+        DpiChanged += OnFormDpiChanged;
 
+        // Load each icon at the size it is drawn at, so the multi-size .ico stays sharp at any scaling.
         var icoPath = Path.Combine(AppContext.BaseDirectory, "assets", "cornwatch.ico");
+        Icon? trayImage = null;
         if (File.Exists(icoPath))
-            try { Icon = new Icon(icoPath); }
+            try
+            {
+                Icon = new Icon(icoPath, SystemInformation.IconSize);
+                trayImage = new Icon(icoPath, SystemInformation.SmallIconSize);
+            }
             catch (Exception ex) { SessionLog.Write("MAINFORM_ICON", ex); }
 
-        _trayIcon = CreateTrayIcon();
+        _trayIcon = CreateTrayIcon(trayImage ?? Icon ?? SystemIcons.Application);
         _startHidden = _inTray = startMinimized;
 
         _monitor = new SystemMonitor(PollInterval);
@@ -101,6 +115,15 @@ public class MainForm : Form
         base.OnHandleCreated(e);
         if (_webViewStarted) return;
         _webViewStarted = true;
+
+        // The constructor could only see the system DPI. If the window was created on a monitor
+        // with a different scale, size it for that monitor before it is first shown.
+        if (DeviceDpi != (int)Dpi.Current)
+        {
+            Dpi.Update(DeviceDpi);
+            ApplyWindowSize();
+            if (WindowState == FormWindowState.Normal) CenterToScreen();
+        }
         _ = InitWebViewAsync();
     }
 
@@ -129,11 +152,12 @@ public class MainForm : Form
             return;
         }
 
+        // Stored in 96-DPI pixels so the window comes back the same apparent size on any monitor.
         var bounds = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
         if (bounds.Width >= MinimumSize.Width && bounds.Height >= MinimumSize.Height)
         {
-            _settings.WindowWidth = bounds.Width;
-            _settings.WindowHeight = bounds.Height;
+            _settings.WindowWidth = (int)Math.Round(bounds.Width / Dpi.Scale);
+            _settings.WindowHeight = (int)Math.Round(bounds.Height / Dpi.Scale);
         }
         _settings.WindowState = _restoreState == FormWindowState.Maximized ? "Maximized" : "Normal";
         SettingsManager.Save();
@@ -145,7 +169,41 @@ public class MainForm : Form
         base.OnFormClosing(e);
     }
 
-    private NotifyIcon CreateTrayIcon()
+    // Settings size is in 96-DPI pixels. Clamped to the screen so a size saved on a larger
+    // monitor (or by 0.3.0 and earlier, which stored physical pixels) can't open off-screen.
+    private void ApplyWindowSize()
+    {
+        var min = Dpi.S(_minLogicalSize);
+        var wanted = Dpi.S(new Size(_settings.WindowWidth, _settings.WindowHeight));
+        var area = (IsHandleCreated ? Screen.FromHandle(Handle) : Screen.FromPoint(Cursor.Position)).WorkingArea;
+        MinimumSize = min;
+        Size = new Size(
+            Math.Clamp(wanted.Width, min.Width, Math.Max(min.Width, area.Width)),
+            Math.Clamp(wanted.Height, min.Height, Math.Max(min.Height, area.Height)));
+    }
+
+    // Window dragged to a monitor with a different scale (or the scale changed in Settings).
+    private void OnFormDpiChanged(object? sender, DpiChangedEventArgs e)
+    {
+        Dpi.Update(e.DeviceDpiNew);
+        // Drop the old minimum first: sized for the old DPI, it would stop the window
+        // shrinking to the suggested bounds when moving to a lower-scale monitor.
+        MinimumSize = Size.Empty;
+        if (WindowState == FormWindowState.Normal && e.SuggestedRectangle != Rectangle.Empty)
+            SetBounds(e.SuggestedRectangle.X, e.SuggestedRectangle.Y, e.SuggestedRectangle.Width, e.SuggestedRectangle.Height);
+        MinimumSize = Dpi.S(_minLogicalSize);
+        if (_fallbackLabel is not null) SetFallbackFont(_fallbackLabel);
+        // The WebView2 control follows the monitor scale on its own (RasterizationScale).
+    }
+
+    private static void SetFallbackFont(Label label)
+    {
+        var old = label.Font;
+        label.Font = new Font("Courier New", Dpi.S(FallbackFontPx), FontStyle.Regular, GraphicsUnit.Pixel);
+        old.Dispose();
+    }
+
+    private NotifyIcon CreateTrayIcon(Icon image)
     {
         var startupItem = new ToolStripMenuItem("Launch at startup") { CheckOnClick = true };
         startupItem.Click += (_, _) =>
@@ -170,7 +228,7 @@ public class MainForm : Form
         var icon = new NotifyIcon
         {
             Text = AppInfo.Name,
-            Icon = Icon ?? SystemIcons.Application,
+            Icon = image,
             Visible = true,
             ContextMenuStrip = menu,
         };
@@ -183,6 +241,8 @@ public class MainForm : Form
     private void ShowBalloon(string title, string text, ToolTipIcon icon, Action onClick)
     {
         _balloonAction = onClick;
+        // Several critical alerts at once can exceed what the shell accepts.
+        if (text.Length > BalloonMaxChars) text = text[..(BalloonMaxChars - 1)] + "…";
         _trayIcon.ShowBalloonTip(6000, title, text, icon);
     }
 
@@ -250,7 +310,7 @@ public class MainForm : Form
             if (IsDisposed) return;
             Controls.Remove(view);
             view.Dispose();
-            Controls.Add(new Label
+            _fallbackLabel = new Label
             {
                 Text = ex is WebView2RuntimeNotFoundException
                     ? "⚠  WebView2 Runtime is not installed.\n\n" +
@@ -262,8 +322,9 @@ public class MainForm : Form
                 TextAlign = ContentAlignment.MiddleCenter,
                 ForeColor = Theme.Warning,
                 BackColor = Theme.Bg,
-                Font = new Font("Courier New", 10f),
-            });
+            };
+            SetFallbackFont(_fallbackLabel);
+            Controls.Add(_fallbackLabel);
         }
     }
 
@@ -272,7 +333,9 @@ public class MainForm : Form
     {
         LastSnapshot = snap;
         NotifyNewCriticalAlerts(snap);
-        if (!_webViewReady) return;
+        // Nobody can see the dashboard from the tray, so don't make it re-render every tick.
+        // ShowWindow() resets the poll timer, which pushes a fresh snapshot straight away.
+        if (!_webViewReady || _inTray) return;
 
         var script = $"window.cornWatch?.onSnapshot({SnapshotExporter.ToJson(snap)})";
         Post(() => _ = _webView?.CoreWebView2?.ExecuteScriptAsync(script));

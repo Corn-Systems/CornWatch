@@ -127,4 +127,12 @@ public class HealthEvaluatorTests
         Assert.Equal("ram.usage", Assert.Single(snap.Alerts).Id);
         Assert.Equal(AlertSeverity.Critical, snap.Alerts[0].Severity);
     }
+
+    [Fact]
+    public void FullRemovableDriveIsNotScored()
+    {
+        var snap = Evaluated(s => s.Disks.Add(new DiskInfo { DriveLetter = @"E:", TotalBytes = 100, FreeBytes = 0, IsRemovable = true }));
+        Assert.Equal(100, snap.HealthScore);
+        Assert.Empty(snap.Alerts);
+    }
 }

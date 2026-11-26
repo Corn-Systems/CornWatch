@@ -4,14 +4,20 @@ namespace CornWatch;
 
 static class Program
 {
-    // Global\ prefix makes the mutex cross-session so a startup-registered
-    // hidden tray instance blocks a second foreground launch.
-    private const string MutexName = @"Global\CornSystems.CornWatch.SingleInstance";
+    // One instance per signed-in user. Everything CornWatch writes is per-user (HKCU Run key,
+    // %AppData%), so Local\ is enough — Global\ also blocked a second Windows user on the same
+    // PC and told them to "check the tray" for an icon that was only in someone else's session.
+    // A startup-registered hidden tray instance still blocks a second launch in the same session.
+    private const string MutexName = @"Local\CornSystems.CornWatch.SingleInstance";
 
     [STAThread]
     static void Main(string[] args)
     {
-        using var mutex = new Mutex(true, MutexName, out var isNew);
+        // First, before any window (including the "already running" box): applies PerMonitorV2 DPI
+        // (ApplicationHighDpiMode in the .csproj, backing up app.manifest) and visual styles.
+        ApplicationConfiguration.Initialize();
+
+        using var mutex = TryCreateMutex(out var isNew);
         if (!isNew)
         {
             MessageBox.Show("CornWatch is already running.\nCheck the system tray.",
@@ -21,7 +27,6 @@ static class Program
 
         try
         {
-            ApplicationConfiguration.Initialize(); // DPI mode comes from ApplicationHighDpiMode in the .csproj
             SessionLog.SessionHeader();
 
             Application.ThreadException += (_, e) => SessionLog.Write("UNHANDLED_THREAD", e.Exception);
@@ -40,7 +45,20 @@ static class Program
         finally
         {
             HealthHistory.Instance.Flush();
-            mutex.ReleaseMutex();
+            mutex?.ReleaseMutex();
+        }
+    }
+
+    private static Mutex? TryCreateMutex(out bool isNew)
+    {
+        try { return new Mutex(true, MutexName, out isNew); }
+        catch (UnauthorizedAccessException)
+        {
+            // The mutex exists but was created by an elevated ("Run as administrator") instance,
+            // which a normal launch can't open. That instance is still running, so treat it as such
+            // instead of crashing before any handler is installed.
+            isNew = false;
+            return null;
         }
     }
 }

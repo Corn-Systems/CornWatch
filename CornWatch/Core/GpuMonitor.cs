@@ -83,11 +83,14 @@ internal sealed class GpuMonitor : IDisposable
         foreach (var slot in _slots) slot.VramUsed?.Dispose();
     }
 
-    // Per adapter (keyed by LUID tag): utilisation summed across every process' 3D / Compute engines.
+    // Per adapter (keyed by LUID tag): load of its busiest 3D / Compute engine, like Task Manager.
+    // Each engine's load is the sum over the processes using it; summing across engines as well
+    // over-reported GPUs with several 3D engines (two engines at 50% showed as 100%).
     private Dictionary<string, (float threeD, float compute)> ReadEngineLoads()
     {
         var loads = new Dictionary<string, (float threeD, float compute)>(StringComparer.OrdinalIgnoreCase);
         if (_engineReadFailed || _slots.Count == 0) return loads;
+        var perEngine = new Dictionary<string, (string tag, bool is3D, float load)>(StringComparer.OrdinalIgnoreCase);
         try
         {
             var instances = new PerformanceCounterCategory(EngineCategory).ReadCategory()[EngineCounter];
@@ -99,17 +102,23 @@ internal sealed class GpuMonitor : IDisposable
                 var name = inst.InstanceName;
                 var is3D = name.Contains("engtype_3D", IgnoreCase);
                 if (!is3D && !name.Contains("engtype_Compute", IgnoreCase)) continue;
-                if (LuidTagOf(name) is not { } tag) continue;
+                if (LuidTagOf(name) is not { } tag || EngineKeyOf(name) is not { } engine) continue;
 
                 samples[name] = inst.Sample;
                 if (!_prevSamples.TryGetValue(name, out var prev)) continue;
                 var value = CounterSample.Calculate(prev, inst.Sample);
                 if (!float.IsFinite(value)) continue;
 
-                var load = loads.GetValueOrDefault(tag);
-                loads[tag] = is3D ? (load.threeD + value, load.compute) : (load.threeD, load.compute + value);
+                var sum = perEngine.TryGetValue(engine, out var e) ? e.load : 0f;
+                perEngine[engine] = (tag, is3D, sum + value);
             }
             _prevSamples = samples;
+
+            foreach (var (tag, is3D, load) in perEngine.Values)
+            {
+                var cur = loads.GetValueOrDefault(tag);
+                loads[tag] = is3D ? (Math.Max(cur.threeD, load), cur.compute) : (cur.threeD, Math.Max(cur.compute, load));
+            }
         }
         catch (Exception ex)
         {
@@ -126,6 +135,15 @@ internal sealed class GpuMonitor : IDisposable
         const int tagLength = 26;
         var start = instanceName.IndexOf("luid_0x", IgnoreCase);
         return start < 0 || start + tagLength > instanceName.Length ? null : instanceName.Substring(start, tagLength);
+    }
+
+    // "pid_1234_luid_0x00000000_0x00014A30_phys_0_eng_3_engtype_3D" → "luid_0x00000000_0x00014A30_phys_0_eng_3"
+    // (one physical engine, shared by every process that uses it).
+    internal static string? EngineKeyOf(string instanceName)
+    {
+        var start = instanceName.IndexOf("luid_0x", IgnoreCase);
+        var end = instanceName.IndexOf("_engtype_", IgnoreCase);
+        return start < 0 || end <= start ? null : instanceName[start..end];
     }
 
     private static string[] InstanceNames(string category)
